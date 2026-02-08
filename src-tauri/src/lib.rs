@@ -2,7 +2,6 @@ use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 use tauri::State;
-use std::collections::HashMap;
 
 // ============================================================================
 // STRUCTURES DE DONNÉES
@@ -26,6 +25,18 @@ pub struct AssetPrice {
     pub eth: f64,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct ProfileData {
+    wallets: Vec<Wallet>,
+    #[serde(default)]
+    theme: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct LoadProfileResult {
+    theme: Option<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct Prices {
     pub btc: AssetPrice,
@@ -46,6 +57,7 @@ pub struct Prices {
     pub uni: AssetPrice,
     pub aave: AssetPrice,
     pub near: AssetPrice,
+    pub dash: AssetPrice,
     // Forex & Gold
     pub forex_jpy_per_usd: f64,
     pub forex_cny_per_usd: f64,
@@ -239,6 +251,26 @@ fn save_settings(state: State<DbState>, settings: Settings) -> Result<(), String
     Ok(())
 }
 
+#[tauri::command]
+fn get_setting(state: State<DbState>, key: String) -> Result<String, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    conn.query_row(
+        "SELECT value FROM settings WHERE key = ?1",
+        params![key],
+        |row| row.get::<_, String>(0),
+    ).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn set_setting(state: State<DbState>, key: String, value: String) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    conn.execute(
+        "INSERT OR REPLACE INTO settings (key, value) VALUES (?1, ?2)",
+        params![key, value],
+    ).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 // ============================================================================
 // COMMANDES TAURI - LISTE DES ALTCOINS
 // ============================================================================
@@ -252,14 +284,15 @@ fn get_altcoins_list() -> Vec<AltcoinInfo> {
         AltcoinInfo { symbol: "uni".to_string(), name: "Uniswap".to_string(), can_fetch: true, fetch_type: "etherscan".to_string() },
         AltcoinInfo { symbol: "aave".to_string(), name: "Aave".to_string(), can_fetch: true, fetch_type: "etherscan".to_string() },
         AltcoinInfo { symbol: "dot".to_string(), name: "Polkadot".to_string(), can_fetch: true, fetch_type: "subscan".to_string() },
-        AltcoinInfo { symbol: "qtum".to_string(), name: "Qtum".to_string(), can_fetch: false, fetch_type: "manual".to_string() },
+        AltcoinInfo { symbol: "qtum".to_string(), name: "Qtum".to_string(), can_fetch: true, fetch_type: "qtum.info".to_string() },
         AltcoinInfo { symbol: "pivx".to_string(), name: "PIVX".to_string(), can_fetch: false, fetch_type: "manual".to_string() },
-        AltcoinInfo { symbol: "ada".to_string(), name: "Cardano".to_string(), can_fetch: false, fetch_type: "manual".to_string() },
-        AltcoinInfo { symbol: "sol".to_string(), name: "Solana".to_string(), can_fetch: false, fetch_type: "manual".to_string() },
-        AltcoinInfo { symbol: "avax".to_string(), name: "Avalanche".to_string(), can_fetch: false, fetch_type: "manual".to_string() },
-        AltcoinInfo { symbol: "doge".to_string(), name: "Dogecoin".to_string(), can_fetch: false, fetch_type: "manual".to_string() },
-        AltcoinInfo { symbol: "xrp".to_string(), name: "XRP".to_string(), can_fetch: false, fetch_type: "manual".to_string() },
-        AltcoinInfo { symbol: "near".to_string(), name: "NEAR Protocol".to_string(), can_fetch: false, fetch_type: "manual".to_string() },
+        AltcoinInfo { symbol: "ada".to_string(), name: "Cardano".to_string(), can_fetch: true, fetch_type: "koios".to_string() },
+        AltcoinInfo { symbol: "sol".to_string(), name: "Solana".to_string(), can_fetch: true, fetch_type: "solana-rpc".to_string() },
+        AltcoinInfo { symbol: "avax".to_string(), name: "Avalanche".to_string(), can_fetch: true, fetch_type: "routescan".to_string() },
+        AltcoinInfo { symbol: "doge".to_string(), name: "Dogecoin".to_string(), can_fetch: true, fetch_type: "blockcypher".to_string() },
+        AltcoinInfo { symbol: "xrp".to_string(), name: "XRP".to_string(), can_fetch: true, fetch_type: "xrpl".to_string() },
+        AltcoinInfo { symbol: "near".to_string(), name: "NEAR Protocol".to_string(), can_fetch: true, fetch_type: "near-rpc".to_string() },
+        AltcoinInfo { symbol: "dash".to_string(), name: "Dash".to_string(), can_fetch: true, fetch_type: "blockchair".to_string() },
     ]
 }
 
@@ -300,6 +333,8 @@ async fn get_prices() -> Result<Prices, String> {
         "AAVEUSDT", "AAVEEUR", "AAVEBTC",
         // NEAR
         "NEARUSDT", "NEAREUR", "NEARBTC",
+        // DASH
+        "DASHUSDT", "DASHBTC",
         // PAXG = 1 troy oz gold tokenized
         "PAXGUSDT",
     ];
@@ -366,6 +401,9 @@ async fn get_prices() -> Result<Prices, String> {
                             "NEARUSDT" => prices.near.usd = price,
                             "NEAREUR" => prices.near.eur = price,
                             "NEARBTC" => prices.near.btc = price,
+                            // DASH
+                            "DASHUSDT" => prices.dash.usd = price,
+                            "DASHBTC" => prices.dash.btc = price,
                             // Gold (PAXG = 1 troy oz)
                             "PAXGUSDT" => prices.gold_usd_per_oz = price,
                             _ => {}
@@ -403,6 +441,20 @@ async fn get_prices() -> Result<Prices, String> {
                     prices.xmr.eur = prices.xmr.usd * (prices.btc.eur / prices.btc.usd);
                 }
             }
+        }
+    }
+
+    // Derived EUR prices for assets without EUR pairs on Binance
+    if prices.btc.eur > 0.0 && prices.btc.usd > 0.0 {
+        let eur_per_usd = prices.btc.eur / prices.btc.usd;
+        // DASH: has USD and BTC but no EUR
+        if prices.dash.usd > 0.0 {
+            prices.dash.eur = prices.dash.usd * eur_per_usd;
+        }
+        // PIVX: only has BTC/ETH pairs, compute USD and EUR from BTC
+        if prices.pivx.btc > 0.0 {
+            prices.pivx.usd = prices.pivx.btc * prices.btc.usd;
+            prices.pivx.eur = prices.pivx.btc * prices.btc.eur;
         }
     }
 
@@ -553,12 +605,6 @@ struct BlockcypherAddress {
     final_balance: Option<u64>,
 }
 
-#[derive(Debug, Deserialize)]
-struct EtherscanResponse {
-    status: String,
-    result: String,
-}
-
 fn get_token_contract(token: &str) -> Option<&'static str> {
     match token {
         "link" => Some("0x514910771af9ca656af840dff83e8264ecf986ca"),
@@ -570,6 +616,7 @@ fn get_token_contract(token: &str) -> Option<&'static str> {
 
 #[tauri::command]
 async fn fetch_balance(state: State<'_, DbState>, asset: String, address: String) -> Result<f64, String> {
+    let address = address.trim().to_string();
     if address.is_empty() {
         return Err("Adresse vide".to_string());
     }
@@ -580,16 +627,93 @@ async fn fetch_balance(state: State<'_, DbState>, asset: String, address: String
         .map_err(|e| e.to_string())?;
 
     match asset.as_str() {
-        // ── BTC via Blockstream ──
+        // ── BTC via Blockstream + fallbacks Blockcypher + Blockchair ──
         "btc" => {
-            let url = format!("https://blockstream.info/api/address/{}/utxo", address);
-            let response = client.get(&url).send().await.map_err(|e| e.to_string())?;
-            if !response.status().is_success() {
-                return Err(format!("Erreur API Blockstream: {}", response.status()));
+            println!("[BTC] Fetching balance for: '{}'", address);
+
+            // 1) Blockstream
+            let url1 = format!("https://blockstream.info/api/address/{}/utxo", address);
+            println!("[BTC] Try Blockstream: {}", url1);
+            match client.get(&url1).send().await {
+                Ok(resp) => {
+                    let status = resp.status();
+                    println!("[BTC] Blockstream status: {}", status);
+                    if status.is_success() {
+                        match resp.json::<Vec<BlockstreamUtxo>>().await {
+                            Ok(utxos) => {
+                                let total_sats: u64 = utxos.iter().map(|u| u.value).sum();
+                                println!("[BTC] Blockstream OK: {} sats ({} utxos)", total_sats, utxos.len());
+                                return Ok(total_sats as f64 / 100_000_000.0);
+                            }
+                            Err(e) => println!("[BTC] Blockstream parse error: {}", e),
+                        }
+                    } else {
+                        let body = resp.text().await.unwrap_or_default();
+                        println!("[BTC] Blockstream error body: {}", body);
+                    }
+                }
+                Err(e) => println!("[BTC] Blockstream network error: {}", e),
             }
-            let utxos: Vec<BlockstreamUtxo> = response.json().await.map_err(|e| e.to_string())?;
-            let total_sats: u64 = utxos.iter().map(|u| u.value).sum();
-            Ok(total_sats as f64 / 100_000_000.0)
+
+            // 2) Blockcypher (excellent legacy P2PKH support)
+            let url2 = format!("https://api.blockcypher.com/v1/btc/main/addrs/{}/balance", address);
+            println!("[BTC] Try Blockcypher: {}", url2);
+            match client.get(&url2).send().await {
+                Ok(resp) => {
+                    let status = resp.status();
+                    println!("[BTC] Blockcypher status: {}", status);
+                    if status.is_success() {
+                        match resp.json::<BlockcypherAddress>().await {
+                            Ok(data) => {
+                                if let Some(bal) = data.final_balance.or(data.balance) {
+                                    println!("[BTC] Blockcypher OK: {} sats", bal);
+                                    return Ok(bal as f64 / 100_000_000.0);
+                                }
+                            }
+                            Err(e) => println!("[BTC] Blockcypher parse error: {}", e),
+                        }
+                    } else {
+                        let body = resp.text().await.unwrap_or_default();
+                        println!("[BTC] Blockcypher error body: {}", body);
+                    }
+                }
+                Err(e) => println!("[BTC] Blockcypher network error: {}", e),
+            }
+
+            // 3) Blockchair
+            let url3 = format!("https://api.blockchair.com/bitcoin/dashboards/address/{}", address);
+            println!("[BTC] Try Blockchair: {}", url3);
+            match client.get(&url3).send().await {
+                Ok(resp) => {
+                    let status = resp.status();
+                    println!("[BTC] Blockchair status: {}", status);
+                    if status.is_success() {
+                        if let Ok(raw) = resp.json::<serde_json::Value>().await {
+                            if let Some(data) = raw.get("data").and_then(|d| d.as_object()) {
+                                for (_key, addr_data) in data {
+                                    if let Some(addr_info) = addr_data.get("address") {
+                                        if let Some(b) = addr_info.get("balance").and_then(|v| v.as_i64()) {
+                                            println!("[BTC] Blockchair OK: {} sats", b);
+                                            return Ok(b as f64 / 100_000_000.0);
+                                        }
+                                        if let Some(b) = addr_info.get("balance").and_then(|v| v.as_f64()) {
+                                            println!("[BTC] Blockchair OK: {} sats (f64)", b);
+                                            return Ok(b / 100_000_000.0);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        let body = resp.text().await.unwrap_or_default();
+                        println!("[BTC] Blockchair error body: {}", body);
+                    }
+                }
+                Err(e) => println!("[BTC] Blockchair network error: {}", e),
+            }
+
+            println!("[BTC] ALL 3 APIs FAILED for: {}", address);
+            Err("Balance BTC introuvable (3 APIs testées) — vérifiez l'adresse".to_string())
         }
 
         // ── BCH via multiple APIs (legacy & cashaddr support) ──
@@ -682,40 +806,162 @@ async fn fetch_balance(state: State<'_, DbState>, asset: String, address: String
 
         // ── ETH via Etherscan v2 ──
         "eth" => {
+            println!("[ETH] Fetching balance for: '{}'", address);
+            // 1) Try Etherscan API
             let api_key = {
                 let conn = state.0.lock().map_err(|e| e.to_string())?;
                 conn.query_row("SELECT value FROM settings WHERE key = 'etherscan_api_key'", [], |row| row.get::<_, String>(0))
                     .unwrap_or_default()
             };
-            if api_key.is_empty() {
-                return Err("Clé API Etherscan requise. Configurez-la dans les paramètres.".to_string());
+            if !api_key.is_empty() {
+                // Try v1 API first (more stable)
+                let url = format!(
+                    "https://api.etherscan.io/api?module=account&action=balance&address={}&tag=latest&apikey={}",
+                    address, api_key
+                );
+                println!("[ETH] Trying Etherscan v1...");
+                match client.get(&url).send().await {
+                    Ok(response) if response.status().is_success() => {
+                        if let Ok(data) = response.json::<serde_json::Value>().await {
+                            println!("[ETH] Etherscan response: {}", serde_json::to_string(&data).unwrap_or_default().chars().take(300).collect::<String>());
+                            let status = data.get("status").and_then(|s| s.as_str()).unwrap_or("0");
+                            if status == "1" {
+                                let wei = match data.get("result") {
+                                    Some(serde_json::Value::String(s)) => s.parse::<f64>().unwrap_or(0.0),
+                                    Some(serde_json::Value::Number(n)) => n.as_f64().unwrap_or(0.0),
+                                    _ => 0.0,
+                                };
+                                let eth_bal = wei / 1_000_000_000_000_000_000.0;
+                                println!("[ETH] Etherscan OK: {} ETH", eth_bal);
+                                return Ok(eth_bal);
+                            }
+                            println!("[ETH] Etherscan status != 1: {:?}", data.get("result"));
+                        }
+                    }
+                    Ok(resp) => println!("[ETH] Etherscan HTTP error: {}", resp.status()),
+                    Err(e) => println!("[ETH] Etherscan network error: {}", e),
+                }
+            } else {
+                println!("[ETH] No Etherscan API key, skipping to RPC");
             }
-            let url = format!(
-                "https://api.etherscan.io/v2/api?chainid=1&module=account&action=balance&address={}&tag=latest&apikey={}",
-                address, api_key
-            );
-            let response = client.get(&url).send().await.map_err(|e| e.to_string())?;
-            if !response.status().is_success() {
-                return Err(format!("Erreur API Etherscan: {}", response.status()));
+
+            // 2) Fallback: direct RPC eth_getBalance
+            let rpc_urls = [
+                "https://eth.llamarpc.com",
+                "https://ethereum-rpc.publicnode.com",
+                "https://rpc.ankr.com/eth",
+            ];
+            for rpc_url in &rpc_urls {
+                println!("[ETH] Trying RPC: {}", rpc_url);
+                let body = serde_json::json!({
+                    "jsonrpc": "2.0", "method": "eth_getBalance",
+                    "params": [&address, "latest"], "id": 1
+                });
+                match client.post(*rpc_url).json(&body).send().await {
+                    Ok(resp) if resp.status().is_success() => {
+                        if let Ok(data) = resp.json::<serde_json::Value>().await {
+                            if let Some(hex_str) = data.get("result").and_then(|r| r.as_str()) {
+                                let hex_clean = hex_str.trim_start_matches("0x");
+                                if !hex_clean.is_empty() {
+                                    if let Ok(wei) = u128::from_str_radix(hex_clean, 16) {
+                                        let eth_bal = wei as f64 / 1_000_000_000_000_000_000.0;
+                                        println!("[ETH] RPC OK: {} ETH", eth_bal);
+                                        return Ok(eth_bal);
+                                    }
+                                }
+                            }
+                            if let Some(err) = data.get("error") {
+                                println!("[ETH] RPC error: {:?}", err);
+                            }
+                        }
+                    }
+                    Ok(resp) => println!("[ETH] RPC HTTP error: {}", resp.status()),
+                    Err(e) => println!("[ETH] RPC network error: {}", e),
+                }
             }
-            let data: EtherscanResponse = response.json().await.map_err(|e| e.to_string())?;
-            if data.status == "1" {
-                let wei: f64 = data.result.parse().unwrap_or(0.0);
-                return Ok(wei / 1_000_000_000_000_000_000.0);
-            }
-            Err(format!("Erreur Etherscan: {}", data.result))
+            Err("Balance ETH non trouvée — vérifiez l'adresse et la clé Etherscan".to_string())
         }
 
-        // ── ETC via Blockchair (raw JSON) ──
+        // ── ETC via RPC (primary) + Blockchair (fallback) ──
         "etc" => {
-            let url = format!("https://api.blockchair.com/ethereum/classic/dashboards/address/{}", address);
-            if let Ok(response) = client.get(&url).send().await {
+            println!("[ETC] Fetching balance for: '{}'", address);
+
+            // 1) ETC RPC direct (eth_getBalance) — multiple reliable endpoints
+            let rpc_urls = [
+                "https://etc.rivet.link",
+                "https://geth-de.etc-network.info",
+                "https://besu-de.etc-network.info",
+            ];
+            for rpc_url in rpc_urls {
+                let body = serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "method": "eth_getBalance",
+                    "params": [&address, "latest"],
+                    "id": 1
+                });
+                println!("[ETC] Try RPC: {}", rpc_url);
+                match client.post(rpc_url)
+                    .header("Content-Type", "application/json")
+                    .json(&body)
+                    .send().await
+                {
+                    Ok(resp) => {
+                        println!("[ETC] RPC status: {}", resp.status());
+                        if resp.status().is_success() {
+                            if let Ok(data) = resp.json::<serde_json::Value>().await {
+                                println!("[ETC] RPC response: {}", serde_json::to_string(&data).unwrap_or_default().chars().take(300).collect::<String>());
+                                if let Some(hex_str) = data.get("result").and_then(|r| r.as_str()) {
+                                    let hex_clean = hex_str.trim_start_matches("0x");
+                                    if !hex_clean.is_empty() {
+                                        if let Ok(wei) = u128::from_str_radix(hex_clean, 16) {
+                                            let bal = wei as f64 / 1_000_000_000_000_000_000.0;
+                                            println!("[ETC] RPC OK: {} ETC", bal);
+                                            return Ok(bal);
+                                        }
+                                    }
+                                }
+                                if let Some(err) = data.get("error") {
+                                    println!("[ETC] RPC error: {:?}", err);
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => println!("[ETC] RPC network error: {}", e),
+                }
+            }
+
+            // 2) Blockscout ETC API
+            let url2 = format!("https://blockscout.com/etc/mainnet/api?module=account&action=balance&address={}", address);
+            println!("[ETC] Try Blockscout: {}", url2);
+            if let Ok(resp) = client.get(&url2).send().await {
+                println!("[ETC] Blockscout status: {}", resp.status());
+                if resp.status().is_success() {
+                    if let Ok(data) = resp.json::<serde_json::Value>().await {
+                        if data.get("status").and_then(|s| s.as_str()) == Some("1") {
+                            if let Some(result) = data.get("result").and_then(|r| r.as_str()) {
+                                if let Ok(wei) = result.parse::<u128>() {
+                                    let bal = wei as f64 / 1_000_000_000_000_000_000.0;
+                                    println!("[ETC] Blockscout OK: {} ETC", bal);
+                                    return Ok(bal);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 3) Blockchair fallback
+            let url3 = format!("https://api.blockchair.com/ethereum/classic/dashboards/address/{}", address);
+            println!("[ETC] Try Blockchair: {}", url3);
+            if let Ok(response) = client.get(&url3).send().await {
+                println!("[ETC] Blockchair status: {}", response.status());
                 if response.status().is_success() {
                     if let Ok(raw) = response.json::<serde_json::Value>().await {
                         if let Some(data) = raw.get("data").and_then(|d| d.as_object()) {
                             for (_key, addr_data) in data {
                                 if let Some(addr_info) = addr_data.get("address") {
                                     if let Some(b) = addr_info.get("balance").and_then(|v| v.as_i64()) {
+                                        println!("[ETC] Blockchair OK: {} wei", b);
                                         return Ok(b as f64 / 1_000_000_000_000_000_000.0);
                                     }
                                     if let Some(b) = addr_info.get("balance").and_then(|v| v.as_f64()) {
@@ -727,34 +973,90 @@ async fn fetch_balance(state: State<'_, DbState>, asset: String, address: String
                     }
                 }
             }
-            Err("Balance ETC non trouvée".to_string())
+            Err("Balance ETC non trouvée — adresse 0x... requise".to_string())
         }
 
-        // ── ERC-20 tokens (LINK, UNI, AAVE) via Etherscan ──
+        // ── ERC-20 tokens (LINK, UNI, AAVE) via Etherscan + RPC fallback ──
         "link" | "uni" | "aave" => {
+            println!("[ERC20] Fetching {} balance for: '{}'", asset, address);
+            let contract = get_token_contract(&asset).ok_or("Token non supporté")?;
+
+            // 1) Try Etherscan API first
             let api_key = {
                 let conn = state.0.lock().map_err(|e| e.to_string())?;
                 conn.query_row("SELECT value FROM settings WHERE key = 'etherscan_api_key'", [], |row| row.get::<_, String>(0))
                     .unwrap_or_default()
             };
-            if api_key.is_empty() {
-                return Err("Clé API Etherscan requise. Configurez-la dans les paramètres.".to_string());
+            if !api_key.is_empty() {
+                let url = format!(
+                    "https://api.etherscan.io/api?module=account&action=tokenbalance&contractaddress={}&address={}&tag=latest&apikey={}",
+                    contract, address, api_key
+                );
+                println!("[ERC20] Trying Etherscan v1...");
+                match client.get(&url).send().await {
+                    Ok(resp) if resp.status().is_success() => {
+                        if let Ok(data) = resp.json::<serde_json::Value>().await {
+                            println!("[ERC20] Etherscan response: {}", serde_json::to_string(&data).unwrap_or_default().chars().take(300).collect::<String>());
+                            let status = data.get("status").and_then(|s| s.as_str()).unwrap_or("0");
+                            if status == "1" {
+                                let raw = match data.get("result") {
+                                    Some(serde_json::Value::String(s)) => s.parse::<f64>().unwrap_or(0.0),
+                                    Some(serde_json::Value::Number(n)) => n.as_f64().unwrap_or(0.0),
+                                    _ => 0.0,
+                                };
+                                let token_bal = raw / 1_000_000_000_000_000_000.0;
+                                println!("[ERC20] Etherscan OK: {} {}", token_bal, asset.to_uppercase());
+                                return Ok(token_bal);
+                            }
+                            println!("[ERC20] Etherscan error: {:?}", data.get("result"));
+                        }
+                    }
+                    Ok(resp) => println!("[ERC20] Etherscan HTTP error: {}", resp.status()),
+                    Err(e) => println!("[ERC20] Etherscan network error: {}", e),
+                }
+            } else {
+                println!("[ERC20] No Etherscan key, skipping to RPC");
             }
-            let contract = get_token_contract(&asset).ok_or("Token non supporté")?;
-            let url = format!(
-                "https://api.etherscan.io/v2/api?chainid=1&module=account&action=tokenbalance&contractaddress={}&address={}&tag=latest&apikey={}",
-                contract, address, api_key
-            );
-            let response = client.get(&url).send().await.map_err(|e| e.to_string())?;
-            if !response.status().is_success() {
-                return Err(format!("Erreur API Etherscan: {}", response.status()));
+
+            // 2) Fallback: RPC eth_call with balanceOf(address)
+            let addr_clean = address.trim_start_matches("0x");
+            let call_data = format!("0x70a08231000000000000000000000000{}", addr_clean);
+            let rpc_urls = [
+                "https://ethereum-rpc.publicnode.com",
+                "https://eth.llamarpc.com",
+                "https://rpc.ankr.com/eth",
+            ];
+            for rpc_url in &rpc_urls {
+                println!("[ERC20] Try RPC: {}", rpc_url);
+                let body = serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "method": "eth_call",
+                    "params": [{"to": contract, "data": &call_data}, "latest"],
+                    "id": 1
+                });
+                match client.post(*rpc_url).json(&body).send().await {
+                    Ok(resp) if resp.status().is_success() => {
+                        if let Ok(data) = resp.json::<serde_json::Value>().await {
+                            if let Some(hex_str) = data.get("result").and_then(|r| r.as_str()) {
+                                let hex_clean = hex_str.trim_start_matches("0x");
+                                if !hex_clean.is_empty() && hex_clean != "0" {
+                                    if let Ok(raw) = u128::from_str_radix(hex_clean, 16) {
+                                        let token_bal = raw as f64 / 1_000_000_000_000_000_000.0;
+                                        println!("[ERC20] RPC OK: {} {}", token_bal, asset.to_uppercase());
+                                        return Ok(token_bal);
+                                    }
+                                }
+                            }
+                            if let Some(err) = data.get("error") {
+                                println!("[ERC20] RPC error: {:?}", err);
+                            }
+                        }
+                    }
+                    Ok(resp) => println!("[ERC20] RPC HTTP error: {}", resp.status()),
+                    Err(e) => println!("[ERC20] RPC network error: {}", e),
+                }
             }
-            let data: EtherscanResponse = response.json().await.map_err(|e| e.to_string())?;
-            if data.status == "1" {
-                let raw_balance: f64 = data.result.parse().unwrap_or(0.0);
-                return Ok(raw_balance / 1_000_000_000_000_000_000.0);
-            }
-            Err(format!("Erreur Etherscan: {}", data.result))
+            Err(format!("Balance {} non trouvée", asset.to_uppercase()))
         }
 
         // ── Manual entry ──
@@ -835,14 +1137,445 @@ async fn fetch_balance(state: State<'_, DbState>, asset: String, address: String
             Err("Balance DOT non trouvée — vérifiez l'adresse Polkadot (format SS58)".to_string())
         }
 
-        "qtum" => Err("QTUM: saisie manuelle requise".to_string()),
+        // ── DOGE via Blockcypher + Blockchair ──
+        "doge" => {
+            println!("[DOGE] Fetching balance for: '{}'", address);
+
+            // 1) Blockcypher
+            let url1 = format!("https://api.blockcypher.com/v1/doge/main/addrs/{}/balance", address);
+            println!("[DOGE] Try Blockcypher: {}", url1);
+            if let Ok(resp) = client.get(&url1).send().await {
+                if resp.status().is_success() {
+                    if let Ok(data) = resp.json::<BlockcypherAddress>().await {
+                        if let Some(bal) = data.final_balance.or(data.balance) {
+                            println!("[DOGE] Blockcypher OK: {} satoshis", bal);
+                            return Ok(bal as f64 / 100_000_000.0);
+                        }
+                    }
+                }
+            }
+
+            // 2) Blockchair
+            let url2 = format!("https://api.blockchair.com/dogecoin/dashboards/address/{}", address);
+            println!("[DOGE] Try Blockchair: {}", url2);
+            if let Ok(resp) = client.get(&url2).send().await {
+                if resp.status().is_success() {
+                    if let Ok(raw) = resp.json::<serde_json::Value>().await {
+                        if let Some(data) = raw.get("data").and_then(|d| d.as_object()) {
+                            for (_key, addr_data) in data {
+                                if let Some(addr_info) = addr_data.get("address") {
+                                    if let Some(b) = addr_info.get("balance").and_then(|v| v.as_i64()) {
+                                        println!("[DOGE] Blockchair OK: {} satoshis", b);
+                                        return Ok(b as f64 / 100_000_000.0);
+                                    }
+                                    if let Some(b) = addr_info.get("balance").and_then(|v| v.as_f64()) {
+                                        return Ok(b / 100_000_000.0);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Err("Balance DOGE non trouvée — vérifiez l'adresse".to_string())
+        }
+
+        // ── DASH via Blockchair ──
+        "dash" => {
+            println!("[DASH] Fetching balance for: '{}'", address);
+            let url = format!("https://api.blockchair.com/dash/dashboards/address/{}", address);
+            if let Ok(resp) = client.get(&url).send().await {
+                if resp.status().is_success() {
+                    if let Ok(raw) = resp.json::<serde_json::Value>().await {
+                        if let Some(data) = raw.get("data").and_then(|d| d.as_object()) {
+                            for (_key, addr_data) in data {
+                                if let Some(addr_info) = addr_data.get("address") {
+                                    if let Some(b) = addr_info.get("balance").and_then(|v| v.as_i64()) {
+                                        println!("[DASH] Blockchair OK: {} duffs", b);
+                                        return Ok(b as f64 / 100_000_000.0);
+                                    }
+                                    if let Some(b) = addr_info.get("balance").and_then(|v| v.as_f64()) {
+                                        return Ok(b / 100_000_000.0);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Err("Balance DASH non trouvée — vérifiez l'adresse".to_string())
+        }
+
+        // ── NEAR via RPC + nearblocks fallback ──
+        "near" => {
+            println!("[NEAR] Fetching balance for: '{}'", address);
+
+            // 1) NEAR RPC mainnet (multiple endpoints)
+            let near_body = serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "janus",
+                "method": "query",
+                "params": {
+                    "request_type": "view_account",
+                    "finality": "final",
+                    "account_id": &address
+                }
+            });
+            println!("[NEAR] Request body: {}", serde_json::to_string(&near_body).unwrap_or_default());
+            let rpc_urls = [
+                "https://rpc.mainnet.near.org",
+                "https://rpc.fastnear.com",
+                "https://near.lava.build",
+            ];
+            for rpc_url in rpc_urls {
+                println!("[NEAR] Try RPC: {}", rpc_url);
+                match client.post(rpc_url)
+                    .header("Content-Type", "application/json")
+                    .json(&near_body)
+                    .send().await
+                {
+                    Ok(resp) => {
+                        println!("[NEAR] RPC status: {}", resp.status());
+                        if resp.status().is_success() {
+                            if let Ok(data) = resp.json::<serde_json::Value>().await {
+                                let resp_str: String = serde_json::to_string(&data).unwrap_or_default().chars().take(500).collect();
+                                println!("[NEAR] RPC response: {}", resp_str);
+                                if let Some(amount_str) = data.get("result")
+                                    .and_then(|r| r.get("amount"))
+                                    .and_then(|a| a.as_str())
+                                {
+                                    println!("[NEAR] Found amount: {}", amount_str);
+                                    if let Ok(yocto) = amount_str.parse::<u128>() {
+                                        let near_bal = yocto as f64 / 1_000_000_000_000_000_000_000_000.0;
+                                        println!("[NEAR] RPC OK: {} NEAR", near_bal);
+                                        return Ok(near_bal);
+                                    }
+                                }
+                                if let Some(err) = data.get("error") {
+                                    println!("[NEAR] RPC error: {:?}", err);
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => println!("[NEAR] RPC network error: {}", e),
+                }
+            }
+
+            // 2) NearBlocks API fallback
+            let url2 = format!("https://api.nearblocks.io/v1/account/{}", address);
+            println!("[NEAR] Try NearBlocks: {}", url2);
+            match client.get(&url2).send().await {
+                Ok(resp) => {
+                    println!("[NEAR] NearBlocks status: {}", resp.status());
+                    if resp.status().is_success() {
+                        if let Ok(data) = resp.json::<serde_json::Value>().await {
+                            let resp_str: String = serde_json::to_string(&data).unwrap_or_default().chars().take(500).collect();
+                            println!("[NEAR] NearBlocks response: {}", resp_str);
+                            if let Some(acc_arr) = data.get("account").and_then(|a| a.as_array()) {
+                                if let Some(first) = acc_arr.first() {
+                                    if let Some(amount_str) = first.get("amount").and_then(|a| a.as_str()) {
+                                        if let Ok(yocto) = amount_str.parse::<u128>() {
+                                            let near_bal = yocto as f64 / 1_000_000_000_000_000_000_000_000.0;
+                                            println!("[NEAR] NearBlocks OK: {} NEAR", near_bal);
+                                            return Ok(near_bal);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(e) => println!("[NEAR] NearBlocks network error: {}", e),
+            }
+            Err("Balance NEAR non trouvée — utilisez le nom de compte (ex: moncompte.near)".to_string())
+        }
+
+        // ── ADA via Koios (free, no API key) ──
+        "ada" => {
+            println!("[ADA] Fetching balance for: '{}'", address);
+            let url = "https://api.koios.rest/api/v1/address_info";
+            let body = serde_json::json!({ "_addresses": [address] });
+            if let Ok(resp) = client.post(url)
+                .header("Content-Type", "application/json")
+                .json(&body)
+                .send().await
+            {
+                println!("[ADA] Koios status: {}", resp.status());
+                if resp.status().is_success() {
+                    if let Ok(data) = resp.json::<serde_json::Value>().await {
+                        // Returns array: [{ "balance": "123456789", ... }]
+                        if let Some(arr) = data.as_array() {
+                            if let Some(first) = arr.first() {
+                                if let Some(bal_str) = first.get("balance").and_then(|b| b.as_str()) {
+                                    if let Ok(lovelace) = bal_str.parse::<f64>() {
+                                        let ada_bal = lovelace / 1_000_000.0;
+                                        println!("[ADA] Koios OK: {} ADA", ada_bal);
+                                        return Ok(ada_bal);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Fallback: Blockfrost public (limited)
+            let url2 = format!("https://cardano-mainnet.blockfrost.io/api/v0/addresses/{}", address);
+            if let Ok(resp) = client.get(&url2)
+                .header("project_id", "mainnetpublic")
+                .send().await
+            {
+                if resp.status().is_success() {
+                    if let Ok(data) = resp.json::<serde_json::Value>().await {
+                        if let Some(amounts) = data.get("amount").and_then(|a| a.as_array()) {
+                            for item in amounts {
+                                if item.get("unit").and_then(|u| u.as_str()) == Some("lovelace") {
+                                    if let Some(qty_str) = item.get("quantity").and_then(|q| q.as_str()) {
+                                        if let Ok(lovelace) = qty_str.parse::<f64>() {
+                                            return Ok(lovelace / 1_000_000.0);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Err("Balance ADA non trouvée — vérifiez l'adresse (format addr1...)".to_string())
+        }
+
+        // ── QTUM via qtum.info ──
+        "qtum" => {
+            println!("[QTUM] Fetching balance for: '{}'", address);
+            let url = format!("https://qtum.info/api/address/{}", address);
+            if let Ok(resp) = client.get(&url).send().await {
+                println!("[QTUM] Status: {}", resp.status());
+                if resp.status().is_success() {
+                    if let Ok(data) = resp.json::<serde_json::Value>().await {
+                        // balance is string like "123.45678900"
+                        if let Some(bal_str) = data.get("balance").and_then(|b| b.as_str()) {
+                            if let Ok(bal) = bal_str.parse::<f64>() {
+                                println!("[QTUM] OK: {} QTUM", bal);
+                                return Ok(bal);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Fallback: Blockchair
+            let url2 = format!("https://api.blockchair.com/qtum/dashboards/address/{}", address);
+            if let Ok(resp) = client.get(&url2).send().await {
+                if resp.status().is_success() {
+                    if let Ok(raw) = resp.json::<serde_json::Value>().await {
+                        if let Some(data) = raw.get("data").and_then(|d| d.as_object()) {
+                            for (_key, addr_data) in data {
+                                if let Some(addr_info) = addr_data.get("address") {
+                                    if let Some(b) = addr_info.get("balance").and_then(|v| v.as_i64()) {
+                                        return Ok(b as f64 / 100_000_000.0);
+                                    }
+                                    if let Some(b) = addr_info.get("balance").and_then(|v| v.as_f64()) {
+                                        return Ok(b / 100_000_000.0);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Err("Balance QTUM non trouvée — vérifiez l'adresse".to_string())
+        }
+
+        // ── AVAX via C-Chain RPC (primary) + Routescan (fallback) ──
+        "avax" => {
+            println!("[AVAX] Fetching balance for: '{}'", address);
+
+            // 1) Direct C-Chain JSON-RPC (eth_getBalance) — multiple endpoints
+            let avax_body = serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "eth_getBalance",
+                "params": [&address, "latest"],
+                "id": 1
+            });
+            let avax_rpcs = [
+                "https://api.avax.network/ext/bc/C/rpc",
+                "https://avalanche-c-chain-rpc.publicnode.com",
+            ];
+            for rpc_url in avax_rpcs {
+                println!("[AVAX] Try RPC: {}", rpc_url);
+                match client.post(rpc_url)
+                    .header("Content-Type", "application/json")
+                    .json(&avax_body)
+                    .send().await
+                {
+                    Ok(resp) => {
+                        println!("[AVAX] RPC status: {}", resp.status());
+                        if resp.status().is_success() {
+                            if let Ok(data) = resp.json::<serde_json::Value>().await {
+                                let resp_str: String = serde_json::to_string(&data).unwrap_or_default().chars().take(300).collect();
+                                println!("[AVAX] RPC response: {}", resp_str);
+                                if let Some(hex_str) = data.get("result").and_then(|r| r.as_str()) {
+                                    let hex_clean = hex_str.trim_start_matches("0x");
+                                    if !hex_clean.is_empty() {
+                                        if let Ok(wei) = u128::from_str_radix(hex_clean, 16) {
+                                            let avax_bal = wei as f64 / 1_000_000_000_000_000_000.0;
+                                            println!("[AVAX] RPC OK: {} AVAX", avax_bal);
+                                            return Ok(avax_bal);
+                                        }
+                                    }
+                                }
+                                if let Some(err) = data.get("error") {
+                                    println!("[AVAX] RPC error: {:?}", err);
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => println!("[AVAX] RPC network error: {}", e),
+                }
+            }
+
+            // 2) Routescan fallback (Etherscan-compatible)
+            let url2 = format!(
+                "https://api.routescan.io/v2/network/mainnet/evm/43114/etherscan/api?module=account&action=balance&address={}&tag=latest",
+                address
+            );
+            println!("[AVAX] Try Routescan: {}", url2);
+            match client.get(&url2).send().await {
+                Ok(resp) => {
+                    println!("[AVAX] Routescan status: {}", resp.status());
+                    if resp.status().is_success() {
+                        if let Ok(data) = resp.json::<serde_json::Value>().await {
+                            println!("[AVAX] Routescan response: {}", serde_json::to_string(&data).unwrap_or_default().chars().take(300).collect::<String>());
+                            if data.get("status").and_then(|s| s.as_str()) == Some("1") {
+                                if let Some(result) = data.get("result").and_then(|r| r.as_str()) {
+                                    if let Ok(wei) = result.parse::<u128>() {
+                                        let avax_bal = wei as f64 / 1_000_000_000_000_000_000.0;
+                                        println!("[AVAX] Routescan OK: {} AVAX", avax_bal);
+                                        return Ok(avax_bal);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(e) => println!("[AVAX] Routescan network error: {}", e),
+            }
+            Err("Balance AVAX non trouvée — utilisez une adresse C-Chain (0x...)".to_string())
+        }
+
+        // ── XRP via XRPL public JSON-RPC ──
+        "xrp" => {
+            println!("[XRP] Fetching balance for: '{}'", address);
+            let body = serde_json::json!({
+                "method": "account_info",
+                "params": [{
+                    "account": address,
+                    "strict": true,
+                    "ledger_index": "current"
+                }]
+            });
+
+            // 1) Ripple public node
+            let url1 = "https://s1.ripple.com:51234/";
+            if let Ok(resp) = client.post(url1)
+                .header("Content-Type", "application/json")
+                .json(&body)
+                .send().await
+            {
+                if resp.status().is_success() {
+                    if let Ok(data) = resp.json::<serde_json::Value>().await {
+                        if let Some(balance_str) = data
+                            .get("result")
+                            .and_then(|r| r.get("account_data"))
+                            .and_then(|a| a.get("Balance"))
+                            .and_then(|b| b.as_str())
+                        {
+                            if let Ok(drops) = balance_str.parse::<f64>() {
+                                let xrp_bal = drops / 1_000_000.0;
+                                println!("[XRP] Ripple OK: {} XRP", xrp_bal);
+                                return Ok(xrp_bal);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 2) XRPL cluster fallback
+            let url2 = "https://xrplcluster.com/";
+            if let Ok(resp) = client.post(url2)
+                .header("Content-Type", "application/json")
+                .json(&body)
+                .send().await
+            {
+                if resp.status().is_success() {
+                    if let Ok(data) = resp.json::<serde_json::Value>().await {
+                        if let Some(balance_str) = data
+                            .get("result")
+                            .and_then(|r| r.get("account_data"))
+                            .and_then(|a| a.get("Balance"))
+                            .and_then(|b| b.as_str())
+                        {
+                            if let Ok(drops) = balance_str.parse::<f64>() {
+                                return Ok(drops / 1_000_000.0);
+                            }
+                        }
+                    }
+                }
+            }
+            Err("Balance XRP non trouvée — vérifiez l'adresse (format r...)".to_string())
+        }
+
+        // ── SOL via Solana JSON-RPC ──
+        "sol" => {
+            println!("[SOL] Fetching balance for: '{}'", address);
+            let sol_body = serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "getBalance",
+                "params": [&address]
+            });
+            println!("[SOL] Request body: {}", serde_json::to_string(&sol_body).unwrap_or_default());
+            let rpc_urls = [
+                "https://api.mainnet-beta.solana.com",
+                "https://solana-rpc.publicnode.com",
+            ];
+            for rpc_url in rpc_urls {
+                println!("[SOL] Try RPC: {}", rpc_url);
+                match client.post(rpc_url)
+                    .header("Content-Type", "application/json")
+                    .json(&sol_body)
+                    .send().await
+                {
+                    Ok(resp) => {
+                        println!("[SOL] RPC status: {}", resp.status());
+                        if resp.status().is_success() {
+                            if let Ok(data) = resp.json::<serde_json::Value>().await {
+                                let resp_str: String = serde_json::to_string(&data).unwrap_or_default().chars().take(500).collect();
+                                println!("[SOL] RPC response: {}", resp_str);
+                                // { "result": { "context": {...}, "value": 123456789 } }
+                                if let Some(lamports) = data.get("result")
+                                    .and_then(|r| r.get("value"))
+                                    .and_then(|v| v.as_u64())
+                                {
+                                    let sol_bal = lamports as f64 / 1_000_000_000.0;
+                                    println!("[SOL] RPC OK: {} SOL", sol_bal);
+                                    return Ok(sol_bal);
+                                }
+                                if let Some(err) = data.get("error") {
+                                    println!("[SOL] RPC error: {:?}", err);
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => println!("[SOL] RPC network error: {}", e),
+                }
+            }
+            Err("Balance SOL non trouvée — vérifiez la clé publique Solana".to_string())
+        }
+
+        // ── Manual only ──
         "pivx" => Err("PIVX: saisie manuelle requise".to_string()),
-        "ada" => Err("Cardano: saisie manuelle requise".to_string()),
-        "sol" => Err("Solana: saisie manuelle requise".to_string()),
-        "avax" => Err("Avalanche: saisie manuelle requise".to_string()),
-        "doge" => Err("Dogecoin: saisie manuelle requise".to_string()),
-        "xrp" => Err("XRP: saisie manuelle requise".to_string()),
-        "near" => Err("NEAR: saisie manuelle requise".to_string()),
+
         _ => Err(format!("Asset non supporté: {}", asset)),
     }
 }
@@ -878,7 +1611,7 @@ fn list_profiles() -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
-fn save_profile(state: State<DbState>, name: String) -> Result<(), String> {
+fn save_profile(state: State<DbState>, name: String, theme: Option<String>) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     let mut stmt = conn
         .prepare("SELECT id, category, asset, name, address, balance FROM wallets ORDER BY id")
@@ -898,28 +1631,35 @@ fn save_profile(state: State<DbState>, name: String) -> Result<(), String> {
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| e.to_string())?;
 
-    let json = serde_json::to_string_pretty(&wallets).map_err(|e| e.to_string())?;
+    let data = ProfileData { wallets, theme };
+    let json = serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?;
     let path = get_profiles_dir().join(format!("{}.json", name));
     std::fs::write(path, json).map_err(|e| e.to_string())?;
     Ok(())
 }
 
 #[tauri::command]
-fn load_profile(state: State<DbState>, name: String) -> Result<(), String> {
+fn load_profile(state: State<DbState>, name: String) -> Result<LoadProfileResult, String> {
     let path = get_profiles_dir().join(format!("{}.json", name));
     let json = std::fs::read_to_string(&path).map_err(|e| format!("Profil introuvable: {}", e))?;
-    let wallets: Vec<Wallet> = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+
+    // Try new format (ProfileData with theme) first, then old format (Vec<Wallet>)
+    let (wallets, saved_theme) = if let Ok(data) = serde_json::from_str::<ProfileData>(&json) {
+        (data.wallets, data.theme)
+    } else {
+        let wallets: Vec<Wallet> = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+        (wallets, None)
+    };
 
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     conn.execute("DELETE FROM wallets", []).map_err(|e| e.to_string())?;
-
     for w in wallets {
         conn.execute(
             "INSERT INTO wallets (category, asset, name, address, balance) VALUES (?1, ?2, ?3, ?4, ?5)",
             params![w.category, w.asset, w.name, w.address, w.balance],
         ).map_err(|e| e.to_string())?;
     }
-    Ok(())
+    Ok(LoadProfileResult { theme: saved_theme })
 }
 
 #[tauri::command]
@@ -973,6 +1713,8 @@ pub fn run() {
             get_altcoins_list,
             get_settings,
             save_settings,
+            get_setting,
+            set_setting,
             list_profiles,
             save_profile,
             load_profile,
