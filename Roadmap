@@ -1,0 +1,39 @@
+Valide V1
+Faire une sauvegarde au moment où l'on demande de charger un aute profil
+Mettre la petite fleche du menu des monnaies du monde tout en bas de ligne par rapport aux rectangles de totaux portefeuiilles
+Quand on reset la template on doit être sur un nouveau profil type "nouveau_profil, nouveau_profil2 (si il y a deja un 1 en memoire)"
+Les sauvegarde sauvegarde aussi le theme utilisé
+Ajouter la possibilité de faire un profil rapide anon et qui disparaitra quand on ferme l'appi
+Le bouton "écraser "nomduprofil" avec l'état actuel" n'a pas de sens, il faut enlver ce bouton
+Le bouton reset doit s'appeler reset/ créer nouveau profil vierge pour être plus clair
+
+
+Créer un théme "noctali", trés sombre en hommage à ce pokemon (chercher des ressources deessus)
+
+V2:
+a) Ajouter une queue de pending dans la partie droite quand il y a de nouvelle transaction qui arrive sur l'adresse. Avec le nombre de confirmation en cours, arreter quand l'adresse est crédité. Et faire un bouton désactiver les message pending dans settings
+Pouvoir modifier les nom de catégorie, donc se détacher de ma stratégie initial tres fixe. L'utilisateur fait ce qu'il veut (la template par défaut reste la même par clin d'oeuil). ca veut dire pouvoir créer des catégorie comme on veut aussi, chercher où intégrer la création de nouvelle catégorie, probablement avec un + créer une nouvelle catégorie quelque part
+
+b) Vérifier la méthode utiliser pour les totaux et l'affichage des prix. Audit general de ce coté là.
+    Redifinir la methode si besoin
+
+c) Ajouter la possibilité d'ajouter un pin code ou mot de passe pour les profils si l'on veut. Car un profil de monitoring de protefeuil celebre n'est pas a craindre, mais le miens j'ai pas envie que quelqun'un profite de mon ordi ouvert pour regarder. Donc avec choix de minuteur avant verouillage si inactivité.
+
+d) Créer un theme "lunar punk" dans des ton rappelant la lune, le desert dystopique futuriste en fond, les couleur bleu saphir et purple.
+
+V2.2
+Tavailler la sécurité
+Limiter les sorties d'infos en clair sur "quel portefeuiilles sont catégoriser" dans l'outil pour prévenir de la surveillance externe.
+Ajouter un theme solar punk
+
+V2.3
+
+Ajouter la possibilité de 2FA en plus du pin code ou mot de passe.
+Ajouter la possibilité d'avoir mot de passe + pin code + 2FA
+Ajouter un theme en hommage à Jude Milhon
+
+V2.3.1
+Commencer un version android/lineage
+
+V2.3.2
+...
