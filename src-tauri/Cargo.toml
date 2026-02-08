@@ -1,6 +1,6 @@
 [package]
 name = "janus-monitor"
-version = "0.9.0"
+version = "1.0.0"
 description = "JANUS Strategy - Crypto Reserve Monitor"
 authors = ["JANUS"]
 edition = "2021"
