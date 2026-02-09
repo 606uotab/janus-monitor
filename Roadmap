@@ -16,7 +16,7 @@ a) Ajouter une queue de pending dans la partie droite quand il y a de nouvelle t
     Pouvoir modifier les nom de catégorie, donc se détacher de ma stratégie initial tres fixe. L'utilisateur fait ce qu'il veut (la template par défaut reste la même par clin d'oeuil). Ca veut dire pouvoir créer des catégorie comme on veut aussi, chercher où intégrer la création de nouvelle catégorie, probablement avec un + créer une nouvelle catégorie quelque part. Casignifie l'ajou d'une barre de recherche similaire à ce que l'on aviat jusqu'à maintenant que pour les alts. Donc on créer une catégorie -> ajouter un token Ca créer le cartouche et dedans on change pas on ajoute une adresse.
    
 a-bis) Ajouter de nouveaux coins : USDT XAUT PAXG USDC DAI EURC PAR (0x68037790A0229e9Ce6EaA8A99ea92964106C4703) RAI Reflex Index (0x03ab458634910aad20ef5f1c8ee96f1d6ac54919) D'autres d'ajout?
-    Changer la template par défaut : 1 categorie Bitcoin 3 adresses 1 categorie Hedging 2 adresse BCH 1 LTC 1 XMR 1
+    Changer la template par défaut : 1 categorie Bitcoin 3 adresses 1 categorie Hedging 2 adresse BCH 1 LTC 1 XMR 1 XAUT 1 RAI Altoins ETH CRV DOT
 
 b) Vérifier la méthode utiliser pour les totaux et l'affichage des prix. Audit general de ce coté là.
     Redifinir la methode si besoin
