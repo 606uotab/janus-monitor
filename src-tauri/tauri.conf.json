@@ -3,14 +3,17 @@
   "productName": "JANUS Monitor",
   "version": "1.0.0",
   "identifier": "com.janus.monitor",
+
   "build": {
     "beforeDevCommand": "npm run dev",
-    "devUrl": "http://localhost:1420",
+    "devUrl": "http://localhost:1420/",
     "beforeBuildCommand": "npm run build",
     "frontendDist": "../dist"
   },
+
   "app": {
     "withGlobalTauri": false,
+
     "windows": [
       {
         "title": "JANUS Monitor",
@@ -20,13 +23,16 @@
         "minHeight": 500,
         "resizable": true,
         "fullscreen": false,
-        "center": true
+        "center": true,
+        "devtools": true
       }
     ],
+
     "security": {
       "csp": null
     }
   },
+
   "bundle": {
     "active": true,
     "targets": ["appimage", "deb"],
