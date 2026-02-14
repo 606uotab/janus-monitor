@@ -1,6 +1,6 @@
 [package]
 name = "janus-monitor"
-version = "2.0.0"
+version = "1.0.0"
 description = "JANUS Strategy - Crypto Reserve Monitor"
 authors = ["JANUS"]
 edition = "2021"
@@ -13,7 +13,6 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-chrono = "0.4"
 tauri = { version = "2", features = [] }
 tauri-plugin-shell = "2"
 serde = { version = "1", features = ["derive"] }

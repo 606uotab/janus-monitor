@@ -4,22 +4,13 @@ use std::sync::Mutex;
 use tauri::State;
 
 // ============================================================================
-// STRUCTURES DE DONNÉES V2
+// STRUCTURES DE DONNÉES
 // ============================================================================
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct Category {
-    pub id: i64,
-    pub name: String,
-    pub color: String,
-    pub bar_color: String,
-    pub display_order: i32,
-}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Wallet {
     pub id: i64,
-    pub category_id: i64,
+    pub category: String,
     pub asset: String,
     pub name: String,
     pub address: String,
@@ -36,7 +27,6 @@ pub struct AssetPrice {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct ProfileData {
-    categories: Vec<Category>,
     wallets: Vec<Wallet>,
     #[serde(default)]
     theme: Option<String>,
@@ -46,941 +36,6 @@ struct ProfileData {
 struct LoadProfileResult {
     theme: Option<String>,
 }
-
-// ============================================================================
-// PHASE 3: PENDING TRANSACTIONS MONITORING
-// ============================================================================
-// ============================================================================
-// PHASE 3 : PENDING TRANSACTIONS MONITORING
-// À ajouter dans lib.rs après les structures existantes
-// ============================================================================
-
-use std::sync::Arc;
-use std::collections::HashMap;
-use tokio::sync::Mutex as TokioMutex;
-use tokio::time::{interval, Duration};
-use tauri::AppHandle;
-use tauri::Emitter;  // ✨ AJOUTER CETTE LIGNE
-use chrono::{Utc, NaiveDateTime};
-
-// Structure pour une transaction en attente
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PendingTransaction {
-    pub tx_hash: String,
-    pub wallet_id: i64,
-    pub wallet_name: String,
-    pub asset: String,
-    pub address: String,
-    pub amount: f64,
-    pub confirmations: u32,
-    pub required_confirmations: u32,
-    pub timestamp: i64, // Unix timestamp
-    pub completed: bool,
-}
-
-// État du système de monitoring
-pub struct MonitoringState {
-    pub enabled: bool,
-    pub pending_txs: Vec<PendingTransaction>,
-    pub monitored_addresses: HashMap<String, MonitoredWallet>, // address -> wallet info
-}
-
-#[derive(Clone)]
-pub struct MonitoredWallet {
-    pub wallet_id: i64,
-    pub wallet_name: String,
-    pub asset: String,
-    pub last_check: i64,
-}
-
-impl Default for MonitoringState {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            pending_txs: Vec::new(),
-            monitored_addresses: HashMap::new(),
-        }
-    }
-}
-
-// ============================================================================
-// COMMANDES TAURI - PENDING TRANSACTIONS
-// ============================================================================
-
-#[tauri::command]
-fn get_pending_transactions(
-    monitoring_state: State<Arc<TokioMutex<MonitoringState>>>,
-) -> Result<Vec<PendingTransaction>, String> {
-    // Utiliser block_on car on est dans un contexte sync
-    let state = tauri::async_runtime::block_on(async {
-        monitoring_state.lock().await
-    });
-    
-    Ok(state.pending_txs.clone())
-}
-
-#[tauri::command]
-fn set_monitoring_enabled(
-    monitoring_state: State<Arc<TokioMutex<MonitoringState>>>,
-    db_state: State<DbState>,
-    enabled: bool,
-) -> Result<(), String> {
-    // Mettre à jour l'état
-    tauri::async_runtime::block_on(async {
-        let mut state = monitoring_state.lock().await;
-        state.enabled = enabled;
-    });
-    
-    // Sauvegarder dans la DB
-    let conn = db_state.0.lock().map_err(|e| e.to_string())?;
-    conn.execute(
-        "INSERT OR REPLACE INTO settings (key, value) VALUES ('monitoring_enabled', ?1)",
-        params![if enabled { "true" } else { "false" }],
-    )
-    .map_err(|e| e.to_string())?;
-    
-    Ok(())
-}
-
-#[tauri::command]
-fn start_monitoring_wallet(
-    monitoring_state: State<Arc<TokioMutex<MonitoringState>>>,
-    wallet_id: i64,
-    address: String,
-    asset: String,
-    wallet_name: String,
-) -> Result<(), String> {
-    if address.trim().is_empty() {
-        return Ok(()); // Pas d'adresse, rien à monitorer
-    }
-    
-    tauri::async_runtime::block_on(async {
-        let mut state = monitoring_state.lock().await;
-        
-        state.monitored_addresses.insert(
-            address.clone(),
-            MonitoredWallet {
-                wallet_id,
-                wallet_name,
-                asset: asset.to_lowercase(),
-                last_check: 0,
-            },
-        );
-    });
-    
-    Ok(())
-}
-
-#[tauri::command]
-fn stop_monitoring_wallet(
-    monitoring_state: State<Arc<TokioMutex<MonitoringState>>>,
-    address: String,
-) -> Result<(), String> {
-    tauri::async_runtime::block_on(async {
-        let mut state = monitoring_state.lock().await;
-        state.monitored_addresses.remove(&address);
-        
-        // Retirer aussi les pending TX de cette adresse
-        state.pending_txs.retain(|tx| tx.address != address);
-    });
-    
-    Ok(())
-}
-
-#[tauri::command]
-fn clear_pending_transaction(
-    monitoring_state: State<Arc<TokioMutex<MonitoringState>>>,
-    tx_hash: String,
-) -> Result<(), String> {
-    tauri::async_runtime::block_on(async {
-        let mut state = monitoring_state.lock().await;
-        state.pending_txs.retain(|tx| tx.tx_hash != tx_hash);
-    });
-    
-    Ok(())
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct TxHistoryEntry {
-    pub id: i64,
-    pub tx_hash: String,
-    pub wallet_id: i64,
-    pub asset: String,
-    pub address: String,
-    pub amount: f64,
-    pub confirmations: u32,
-    pub timestamp: i64,
-    pub completed_at: i64,
-}
-
-#[tauri::command]
-fn get_tx_history(state: State<DbState>, limit: Option<u32>) -> Result<Vec<TxHistoryEntry>, String> {
-    let conn = state.0.lock().map_err(|e| e.to_string())?;
-    let lim = limit.unwrap_or(50);
-    let mut stmt = conn.prepare(
-        "SELECT id, tx_hash, wallet_id, asset, address, amount, confirmations, timestamp, completed_at FROM tx_history ORDER BY completed_at DESC LIMIT ?1"
-    ).map_err(|e| e.to_string())?;
-    let entries = stmt.query_map(params![lim], |row| {
-        Ok(TxHistoryEntry {
-            id: row.get(0)?,
-            tx_hash: row.get(1)?,
-            wallet_id: row.get(2)?,
-            asset: row.get(3)?,
-            address: row.get(4)?,
-            amount: row.get(5)?,
-            confirmations: row.get::<_, i64>(6)? as u32,
-            timestamp: row.get(7)?,
-            completed_at: row.get(8)?,
-        })
-    }).map_err(|e| e.to_string())?
-    .filter_map(|r| r.ok())
-    .collect();
-    Ok(entries)
-}
-
-// ============================================================================
-// BLOCKCHAIN TX HISTORY (DIRECT FETCH)
-// ============================================================================
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct HistoryTx {
-    pub tx_hash: String,
-    pub asset: String,
-    pub address: String,
-    pub wallet_name: String,
-    pub amount: f64,
-    pub direction: String, // "in" or "out"
-    pub from_address: String,
-    pub to_address: String,
-    pub confirmations: u32,
-    pub timestamp: i64,
-    pub block_height: u64,
-}
-
-#[tauri::command]
-async fn fetch_address_history(
-    address: String,
-    asset: String,
-    wallet_name: String,
-    etherscan_key: Option<String>,
-    limit: Option<u32>,
-) -> Result<Vec<HistoryTx>, String> {
-    let lim = limit.unwrap_or(10) as usize;
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(15))
-        .build()
-        .map_err(|e| e.to_string())?;
-
-    match asset.as_str() {
-        "btc" => fetch_btc_history(&client, &address, &wallet_name, lim).await,
-        "eth" => fetch_eth_history(&client, &address, &wallet_name, &etherscan_key.unwrap_or_default(), lim).await,
-        "ltc" => fetch_blockchair_history(&client, &address, &wallet_name, "litecoin", "ltc", lim).await,
-        "bch" => fetch_blockchair_history(&client, &address, &wallet_name, "bitcoin-cash", "bch", lim).await,
-        "dot" => fetch_dot_history(&client, &address, &wallet_name, lim).await,
-        "etc" => fetch_etc_history(&client, &address, &wallet_name, lim).await,
-        _ => Ok(vec![]),
-    }
-}
-
-async fn fetch_btc_history(
-    client: &reqwest::Client,
-    address: &str,
-    wallet_name: &str,
-    limit: usize,
-) -> Result<Vec<HistoryTx>, String> {
-    let tip_height: u64 = client
-        .get("https://blockstream.info/api/blocks/tip/height")
-        .send().await.map_err(|e| e.to_string())?
-        .text().await.map_err(|e| e.to_string())?
-        .trim().parse().map_err(|e: std::num::ParseIntError| e.to_string())?;
-
-    let url = format!("https://blockstream.info/api/address/{}/txs", address);
-    let resp: serde_json::Value = client
-        .get(&url).send().await.map_err(|e| e.to_string())?
-        .json().await.map_err(|e| e.to_string())?;
-
-    let txs = resp.as_array().ok_or("Invalid BTC response")?;
-    let mut results = Vec::new();
-
-    for tx in txs.iter().take(limit) {
-        let hash = tx["txid"].as_str().unwrap_or_default().to_string();
-        let status = &tx["status"];
-        let confirmed = status["confirmed"].as_bool().unwrap_or(false);
-        let block_h = status["block_height"].as_u64().unwrap_or(0);
-        let timestamp = status["block_time"].as_i64().unwrap_or(0);
-        let confs = if confirmed && block_h > 0 { (tip_height - block_h + 1) as u32 } else { 0 };
-
-        // Calculate amount for this address
-        let mut received: f64 = 0.0;
-        let mut sent: f64 = 0.0;
-        if let Some(vouts) = tx["vout"].as_array() {
-            for vout in vouts {
-                if vout["scriptpubkey_address"].as_str() == Some(address) {
-                    received += vout["value"].as_u64().unwrap_or(0) as f64 / 1e8;
-                }
-            }
-        }
-        if let Some(vins) = tx["vin"].as_array() {
-            for vin in vins {
-                if vin["prevout"]["scriptpubkey_address"].as_str() == Some(address) {
-                    sent += vin["prevout"]["value"].as_u64().unwrap_or(0) as f64 / 1e8;
-                }
-            }
-        }
-        let net = received - sent;
-        let (amount, direction) = if net >= 0.0 { (net, "in") } else { (net.abs(), "out") };
-
-        // Extract from/to addresses
-        let first_sender = tx["vin"].as_array()
-            .and_then(|vins| vins.first())
-            .and_then(|v| v["prevout"]["scriptpubkey_address"].as_str())
-            .unwrap_or_default().to_string();
-        let first_recipient = tx["vout"].as_array()
-            .and_then(|vouts| vouts.iter().find(|v| v["scriptpubkey_address"].as_str() != Some(address)))
-            .or_else(|| tx["vout"].as_array().and_then(|v| v.first()))
-            .and_then(|v| v["scriptpubkey_address"].as_str())
-            .unwrap_or_default().to_string();
-        let (from_addr, to_addr) = if direction == "in" {
-            (first_sender, address.to_string())
-        } else {
-            (address.to_string(), first_recipient)
-        };
-
-        results.push(HistoryTx {
-            tx_hash: hash,
-            asset: "btc".into(),
-            address: address.to_string(),
-            wallet_name: wallet_name.to_string(),
-            amount,
-            direction: direction.into(),
-            from_address: from_addr,
-            to_address: to_addr,
-            confirmations: confs,
-            timestamp,
-            block_height: block_h,
-        });
-    }
-    Ok(results)
-}
-
-async fn fetch_eth_history(
-    client: &reqwest::Client,
-    address: &str,
-    wallet_name: &str,
-    api_key: &str,
-    limit: usize,
-) -> Result<Vec<HistoryTx>, String> {
-    if api_key.is_empty() {
-        return Err("Etherscan API key required".into());
-    }
-    let url = format!(
-        "https://api.etherscan.io/api?module=account&action=txlist&address={}&startblock=0&endblock=99999999&page=1&offset={}&sort=desc&apikey={}",
-        address, limit, api_key
-    );
-    let resp: serde_json::Value = client.get(&url).send().await.map_err(|e| e.to_string())?
-        .json().await.map_err(|e| e.to_string())?;
-
-    let tip_url = format!(
-        "https://api.etherscan.io/api?module=proxy&action=eth_blockNumber&apikey={}", api_key
-    );
-    let tip_resp: serde_json::Value = client.get(&tip_url).send().await.map_err(|e| e.to_string())?
-        .json().await.map_err(|e| e.to_string())?;
-    let tip_hex = tip_resp["result"].as_str().unwrap_or("0x0").trim_start_matches("0x");
-    let tip_height = u64::from_str_radix(tip_hex, 16).unwrap_or(0);
-
-    let txs = resp["result"].as_array().ok_or("Invalid ETH response")?;
-    let addr_lower = address.to_lowercase();
-    let mut results = Vec::new();
-
-    for tx in txs.iter().take(limit) {
-        let hash = tx["hash"].as_str().unwrap_or_default().to_string();
-        let from = tx["from"].as_str().unwrap_or_default().to_lowercase();
-        let to = tx["to"].as_str().unwrap_or_default().to_lowercase();
-        let value_str = tx["value"].as_str().unwrap_or("0");
-        let value_wei: f64 = value_str.parse().unwrap_or(0.0);
-        let amount = value_wei / 1e18;
-        let block_h: u64 = tx["blockNumber"].as_str().unwrap_or("0").parse().unwrap_or(0);
-        let timestamp: i64 = tx["timeStamp"].as_str().unwrap_or("0").parse().unwrap_or(0);
-        let confs = if block_h > 0 { (tip_height - block_h + 1) as u32 } else { 0 };
-        let direction = if to == addr_lower { "in" } else { "out" };
-
-        results.push(HistoryTx {
-            tx_hash: hash,
-            asset: "eth".into(),
-            address: address.to_string(),
-            wallet_name: wallet_name.to_string(),
-            amount,
-            direction: direction.into(),
-            from_address: from,
-            to_address: to,
-            confirmations: confs,
-            timestamp,
-            block_height: block_h,
-        });
-    }
-    Ok(results)
-}
-
-async fn fetch_blockchair_history(
-    client: &reqwest::Client,
-    address: &str,
-    wallet_name: &str,
-    chain: &str,
-    asset: &str,
-    limit: usize,
-) -> Result<Vec<HistoryTx>, String> {
-    let url = format!(
-        "https://api.blockchair.com/{}/dashboards/address/{}?transaction_details=true&limit={}", chain, address, limit
-    );
-    let resp: serde_json::Value = client.get(&url).send().await.map_err(|e| e.to_string())?
-        .json().await.map_err(|e| e.to_string())?;
-
-    let data = &resp["data"];
-    let addr_data = data.as_object()
-        .and_then(|m| m.values().next())
-        .ok_or("Invalid Blockchair response")?;
-
-    let txs = addr_data["transactions"].as_array().ok_or("No transactions")?;
-    let mut results = Vec::new();
-
-    for tx in txs.iter().take(limit) {
-        let hash = tx["hash"].as_str().unwrap_or_default().to_string();
-        let balance_change = tx["balance_change"].as_f64().unwrap_or(0.0);
-        let amount = (balance_change.abs()) / 1e8;
-        let direction = if balance_change >= 0.0 { "in" } else { "out" };
-        let block_h = tx["block_id"].as_u64().unwrap_or(0);
-        let time_str = tx["time"].as_str().unwrap_or_default();
-        let timestamp = NaiveDateTime::parse_from_str(time_str, "%Y-%m-%d %H:%M:%S")
-            .map(|dt| dt.and_utc().timestamp())
-            .unwrap_or(0);
-
-        results.push(HistoryTx {
-            tx_hash: hash,
-            asset: asset.to_string(),
-            address: address.to_string(),
-            wallet_name: wallet_name.to_string(),
-            amount,
-            direction: direction.into(),
-            from_address: if balance_change >= 0.0 { String::new() } else { address.to_string() },
-            to_address: if balance_change >= 0.0 { address.to_string() } else { String::new() },
-            confirmations: 9999,
-            timestamp,
-            block_height: block_h,
-        });
-    }
-    Ok(results)
-}
-
-async fn fetch_dot_history(
-    client: &reqwest::Client,
-    address: &str,
-    wallet_name: &str,
-    limit: usize,
-) -> Result<Vec<HistoryTx>, String> {
-    let url = "https://polkadot.api.subscan.io/api/scan/transfers";
-    let body = serde_json::json!({
-        "address": address,
-        "row": limit,
-        "page": 0
-    });
-    let resp: serde_json::Value = client.post(url)
-        .header("Content-Type", "application/json")
-        .json(&body)
-        .send().await.map_err(|e| e.to_string())?
-        .json().await.map_err(|e| e.to_string())?;
-
-    let transfers = resp["data"]["transfers"].as_array();
-    let mut results = Vec::new();
-    let addr_lower = address.to_lowercase();
-
-    if let Some(txs) = transfers {
-        for tx in txs.iter().take(limit) {
-            let hash = tx["hash"].as_str().unwrap_or_default().to_string();
-            let from = tx["from"].as_str().unwrap_or_default().to_lowercase();
-            let to_addr = tx["to"].as_str().unwrap_or_default().to_lowercase();
-            let amount_str = tx["amount"].as_str().unwrap_or("0");
-            let amount: f64 = amount_str.parse().unwrap_or(0.0);
-            let direction = if from == addr_lower { "out" } else { "in" };
-            let block_h = tx["block_num"].as_u64().unwrap_or(0);
-            let timestamp = tx["block_timestamp"].as_i64().unwrap_or(0);
-
-            results.push(HistoryTx {
-                tx_hash: hash,
-                asset: "dot".into(),
-                address: address.to_string(),
-                wallet_name: wallet_name.to_string(),
-                amount,
-                direction: direction.into(),
-                from_address: from,
-                to_address: to_addr,
-                confirmations: 9999,
-                timestamp,
-                block_height: block_h,
-            });
-        }
-    }
-    Ok(results)
-}
-
-async fn fetch_etc_history(
-    client: &reqwest::Client,
-    address: &str,
-    wallet_name: &str,
-    limit: usize,
-) -> Result<Vec<HistoryTx>, String> {
-    let url = format!(
-        "https://blockscout.com/etc/mainnet/api?module=account&action=txlist&address={}&page=1&offset={}&sort=desc",
-        address, limit
-    );
-    let resp: serde_json::Value = client.get(&url).send().await.map_err(|e| e.to_string())?
-        .json().await.map_err(|e| e.to_string())?;
-
-    let txs = resp["result"].as_array().ok_or("Invalid ETC response")?;
-    let addr_lower = address.to_lowercase();
-    let mut results = Vec::new();
-
-    for tx in txs.iter().take(limit) {
-        let hash = tx["hash"].as_str().unwrap_or_default().to_string();
-        let from = tx["from"].as_str().unwrap_or_default().to_lowercase();
-        let to = tx["to"].as_str().unwrap_or_default().to_lowercase();
-        let value_str = tx["value"].as_str().unwrap_or("0");
-        let value_wei: f64 = value_str.parse().unwrap_or(0.0);
-        let amount = value_wei / 1e18;
-        let block_h: u64 = tx["blockNumber"].as_str().unwrap_or("0").parse().unwrap_or(0);
-        let timestamp: i64 = tx["timeStamp"].as_str().unwrap_or("0").parse().unwrap_or(0);
-        let direction = if to == addr_lower { "in" } else { "out" };
-
-        results.push(HistoryTx {
-            tx_hash: hash,
-            asset: "etc".into(),
-            address: address.to_string(),
-            wallet_name: wallet_name.to_string(),
-            amount,
-            direction: direction.into(),
-            from_address: from,
-            to_address: to,
-            confirmations: 9999,
-            timestamp,
-            block_height: block_h,
-        });
-    }
-    Ok(results)
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct ProfileSecurity {
-    pub has_pin: bool,
-    pub inactivity_minutes: u32,
-}
-
-#[tauri::command]
-fn get_profile_security(state: State<DbState>, profile_name: String) -> Result<ProfileSecurity, String> {
-    let conn = state.0.lock().map_err(|e| e.to_string())?;
-    match conn.query_row(
-        "SELECT pin_hash, inactivity_minutes FROM profile_security WHERE profile_name = ?1",
-        params![profile_name],
-        |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
-    ) {
-        Ok((_, mins)) => Ok(ProfileSecurity { has_pin: true, inactivity_minutes: mins as u32 }),
-        Err(_) => Ok(ProfileSecurity { has_pin: false, inactivity_minutes: 0 }),
-    }
-}
-
-#[tauri::command]
-fn set_profile_pin(state: State<DbState>, profile_name: String, pin_hash: String, inactivity_minutes: Option<u32>) -> Result<(), String> {
-    let conn = state.0.lock().map_err(|e| e.to_string())?;
-    let mins = inactivity_minutes.unwrap_or(0) as i64;
-    if pin_hash == "__KEEP__" {
-        // Only update timer, keep existing PIN hash
-        conn.execute(
-            "UPDATE profile_security SET inactivity_minutes = ?1 WHERE profile_name = ?2",
-            params![mins, profile_name],
-        ).map_err(|e| e.to_string())?;
-    } else {
-        conn.execute(
-            "INSERT OR REPLACE INTO profile_security (profile_name, pin_hash, inactivity_minutes) VALUES (?1, ?2, ?3)",
-            params![profile_name, pin_hash, mins],
-        ).map_err(|e| e.to_string())?;
-    }
-    Ok(())
-}
-
-#[tauri::command]
-fn verify_profile_pin(state: State<DbState>, profile_name: String, pin_hash: String) -> Result<bool, String> {
-    let conn = state.0.lock().map_err(|e| e.to_string())?;
-    match conn.query_row(
-        "SELECT pin_hash FROM profile_security WHERE profile_name = ?1",
-        params![profile_name],
-        |row| row.get::<_, String>(0),
-    ) {
-        Ok(stored_hash) => Ok(stored_hash == pin_hash),
-        Err(_) => Ok(true), // No PIN set = always valid
-    }
-}
-
-#[tauri::command]
-fn remove_profile_pin(state: State<DbState>, profile_name: String) -> Result<(), String> {
-    let conn = state.0.lock().map_err(|e| e.to_string())?;
-    conn.execute("DELETE FROM profile_security WHERE profile_name = ?1", params![profile_name])
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-// ============================================================================
-// BACKGROUND MONITORING TASK
-// ============================================================================
-
-pub fn start_monitoring_task(
-    monitoring_state: Arc<TokioMutex<MonitoringState>>,
-    app_handle: AppHandle,
-    db_path: std::path::PathBuf,
-) {
-    tauri::async_runtime::spawn(async move {
-        let mut check_interval = interval(Duration::from_secs(30)); // Vérifier toutes les 30s
-        
-        loop {
-            check_interval.tick().await;
-            
-            // Vérifier si le monitoring est activé
-            let enabled = {
-                let state = monitoring_state.lock().await;
-                state.enabled
-            };
-            
-            if !enabled {
-                continue;
-            }
-            
-            // Récupérer les adresses à monitorer
-            let addresses = {
-                let state = monitoring_state.lock().await;
-                state.monitored_addresses.clone()
-            };
-            
-            // Read etherscan API key from DB for ETH monitoring
-            let etherscan_key = {
-                if let Ok(conn) = Connection::open(&db_path) {
-                    conn.query_row(
-                        "SELECT value FROM settings WHERE key = 'etherscan_api_key'",
-                        [], |row| row.get::<_, String>(0),
-                    ).unwrap_or_default()
-                } else { String::new() }
-            };
-
-            // Vérifier chaque adresse
-            for (address, wallet_info) in addresses {
-                match check_address_transactions(&address, &wallet_info.asset, &etherscan_key).await {
-                    Ok(transactions) => {
-                        // Traiter les transactions
-                        process_transactions(
-                            &monitoring_state,
-                            &app_handle,
-                            &db_path,
-                            transactions,
-                            wallet_info.wallet_id,
-                            &wallet_info.wallet_name,
-                            &address,
-                            &wallet_info.asset,
-                        ).await;
-                    }
-                    Err(e) => {
-                        eprintln!("Erreur monitoring {} ({}): {}", address, wallet_info.asset, e);
-                    }
-                }
-                
-                // Pause courte entre chaque adresse pour éviter rate limits
-                tokio::time::sleep(Duration::from_millis(500)).await;
-            }
-        }
-    });
-}
-
-async fn process_transactions(
-    monitoring_state: &Arc<TokioMutex<MonitoringState>>,
-    app_handle: &AppHandle,
-    db_path: &std::path::Path,
-    transactions: Vec<BlockchainTransaction>,
-    wallet_id: i64,
-    wallet_name: &str,
-    address: &str,
-    asset: &str,
-) {
-    let mut state = monitoring_state.lock().await;
-    let mut has_changes = false;
-    
-    for tx in transactions {
-        // Chercher si cette TX existe déjà
-        if let Some(existing) = state.pending_txs.iter_mut().find(|t| t.tx_hash == tx.hash) {
-            // Mettre à jour les confirmations
-            if existing.confirmations != tx.confirmations {
-                existing.confirmations = tx.confirmations;
-                existing.completed = existing.confirmations >= existing.required_confirmations;
-                has_changes = true;
-            }
-        } else {
-            // Nouvelle transaction
-            let required_confs = match asset {
-                "btc" | "bch" | "ltc" => 6,
-                "eth" => 12,
-                _ => 6,
-            };
-            
-            let pending_tx = PendingTransaction {
-                tx_hash: tx.hash.clone(),
-                wallet_id,
-                wallet_name: wallet_name.to_string(),
-                asset: asset.to_string(),
-                address: address.to_string(),
-                amount: tx.amount,
-                confirmations: tx.confirmations,
-                required_confirmations: required_confs,
-                timestamp: tx.timestamp,
-                completed: tx.confirmations >= required_confs,
-            };
-            
-            state.pending_txs.push(pending_tx);
-            has_changes = true;
-        }
-    }
-    
-    // Save newly completed TXs to history database
-    let newly_completed: Vec<PendingTransaction> = state.pending_txs.iter()
-        .filter(|tx| tx.completed)
-        .cloned()
-        .collect();
-    
-    if !newly_completed.is_empty() {
-        if let Ok(conn) = Connection::open(db_path) {
-            for tx in &newly_completed {
-                conn.execute(
-                    "INSERT OR IGNORE INTO tx_history (tx_hash, wallet_id, asset, address, amount, confirmations, timestamp, completed_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                    params![tx.tx_hash, tx.wallet_id, tx.asset, tx.address, tx.amount, tx.confirmations, tx.timestamp, Utc::now().timestamp()],
-                ).ok();
-            }
-        }
-    }
-
-    // Retirer les TX terminées depuis plus de 1h
-    let cutoff = Utc::now().timestamp() - 3600;
-    state.pending_txs.retain(|tx| {
-        !tx.completed || tx.timestamp > cutoff
-    });
-    
-    // Notifier le frontend si changements
-    if has_changes {
-        let txs = state.pending_txs.clone();
-        drop(state); // Release le lock avant d'émettre
-        
-        app_handle.emit("pending-tx-update", &txs).ok();
-    }
-}
-
-// ============================================================================
-// BLOCKCHAIN QUERIES
-// ============================================================================
-
-#[derive(Debug, Clone)]
-struct BlockchainTransaction {
-    hash: String,
-    amount: f64,
-    confirmations: u32,
-    timestamp: i64,
-}
-
-async fn check_address_transactions(
-    address: &str,
-    asset: &str,
-    etherscan_key: &str,
-) -> Result<Vec<BlockchainTransaction>, String> {
-    match asset {
-        "btc" => check_btc_transactions(address).await,
-        "eth" => check_eth_transactions(address, etherscan_key).await,
-        "ltc" => check_ltc_transactions(address).await,
-        "bch" => check_bch_transactions(address).await,
-        _ => Ok(vec![]),
-    }
-}
-
-async fn check_btc_transactions(address: &str) -> Result<Vec<BlockchainTransaction>, String> {
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build()
-        .map_err(|e| e.to_string())?;
-
-    // 1) Get current tip height
-    let tip_height: u64 = client
-        .get("https://blockstream.info/api/blocks/tip/height")
-        .send().await.map_err(|e| format!("tip: {}", e))?
-        .text().await.map_err(|e| format!("tip parse: {}", e))?
-        .trim().parse().unwrap_or(0);
-
-    if tip_height == 0 {
-        return Err("Impossible de récupérer la hauteur du bloc".into());
-    }
-
-    // 2) Get recent transactions for address
-    let url = format!("https://blockstream.info/api/address/{}/txs", address);
-    let response = client.get(&url).send().await
-        .map_err(|e| format!("Erreur réseau: {}", e))?;
-    
-    if !response.status().is_success() {
-        return Err(format!("HTTP {}", response.status()));
-    }
-    
-    let txs: Vec<serde_json::Value> = response.json().await
-        .map_err(|e| format!("Erreur parsing JSON: {}", e))?;
-    
-    let mut result = Vec::new();
-    
-    for tx in txs.iter().take(10) {
-        let tx_hash = tx["txid"].as_str().unwrap_or("").to_string();
-        let status = &tx["status"];
-        let confirmed = status["confirmed"].as_bool().unwrap_or(false);
-        
-        let confirmations = if confirmed {
-            let block_h = status["block_height"].as_u64().unwrap_or(0);
-            if block_h > 0 { (tip_height - block_h + 1) as u32 } else { 0 }
-        } else {
-            0 // unconfirmed (in mempool)
-        };
-        
-        // Calculer le montant reçu par cette adresse
-        let mut amount = 0.0;
-        if let Some(vout) = tx["vout"].as_array() {
-            for output in vout {
-                if let Some(addr) = output["scriptpubkey_address"].as_str() {
-                    if addr == address {
-                        amount += output["value"].as_f64().unwrap_or(0.0) / 100_000_000.0;
-                    }
-                }
-            }
-        }
-        
-        // Only include recent TX (< 6 confirmations, or unconfirmed)
-        if amount > 0.0 && confirmations < 6 {
-            result.push(BlockchainTransaction {
-                hash: tx_hash,
-                amount,
-                confirmations,
-                timestamp: status["block_time"].as_i64().unwrap_or(chrono::Utc::now().timestamp()),
-            });
-        }
-    }
-    
-    Ok(result)
-}
-
-async fn check_eth_transactions(address: &str, api_key: &str) -> Result<Vec<BlockchainTransaction>, String> {
-    if api_key.is_empty() {
-        return Ok(vec![]); // Can't monitor without API key
-    }
-
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build().map_err(|e| e.to_string())?;
-
-    // Get current block number
-    let tip_url = format!(
-        "https://api.etherscan.io/api?module=proxy&action=eth_blockNumber&apikey={}", api_key
-    );
-    let tip_resp: serde_json::Value = client.get(&tip_url).send().await
-        .map_err(|e| format!("eth tip: {}", e))?
-        .json().await.map_err(|e| format!("eth tip json: {}", e))?;
-    let tip_hex = tip_resp["result"].as_str().unwrap_or("0x0");
-    let tip_height = u64::from_str_radix(tip_hex.trim_start_matches("0x"), 16).unwrap_or(0);
-
-    // Get recent normal transactions
-    let url = format!(
-        "https://api.etherscan.io/api?module=account&action=txlist&address={}&startblock={}&endblock=99999999&page=1&offset=10&sort=desc&apikey={}",
-        address, tip_height.saturating_sub(100), api_key // last ~100 blocks
-    );
-    let resp: serde_json::Value = client.get(&url).send().await
-        .map_err(|e| format!("eth txlist: {}", e))?
-        .json().await.map_err(|e| format!("eth json: {}", e))?;
-
-    let mut result = Vec::new();
-    if let Some(txs) = resp["result"].as_array() {
-        for tx in txs.iter().take(10) {
-            let to = tx["to"].as_str().unwrap_or("");
-            if to.to_lowercase() != address.to_lowercase() { continue; } // only incoming
-            
-            let value_wei = tx["value"].as_str().unwrap_or("0");
-            let amount = value_wei.parse::<f64>().unwrap_or(0.0) / 1e18;
-            if amount <= 0.0 { continue; }
-
-            let tx_block = tx["blockNumber"].as_str().unwrap_or("0").parse::<u64>().unwrap_or(0);
-            let confirmations = if tx_block > 0 { (tip_height - tx_block + 1) as u32 } else { 0 };
-            
-            if confirmations < 12 {
-                result.push(BlockchainTransaction {
-                    hash: tx["hash"].as_str().unwrap_or("").to_string(),
-                    amount,
-                    confirmations,
-                    timestamp: tx["timeStamp"].as_str().unwrap_or("0").parse::<i64>().unwrap_or(0),
-                });
-            }
-        }
-    }
-    Ok(result)
-}
-
-async fn check_ltc_transactions(address: &str) -> Result<Vec<BlockchainTransaction>, String> {
-    check_blockchair_transactions(address, "litecoin", 6).await
-}
-
-async fn check_bch_transactions(address: &str) -> Result<Vec<BlockchainTransaction>, String> {
-    check_blockchair_transactions(address, "bitcoin-cash", 6).await
-}
-
-async fn check_blockchair_transactions(address: &str, chain: &str, required_confs: u32) -> Result<Vec<BlockchainTransaction>, String> {
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build().map_err(|e| e.to_string())?;
-
-    let url = format!(
-        "https://api.blockchair.com/{}/dashboards/address/{}?transaction_details=true&limit=10",
-        chain, address
-    );
-    let resp: serde_json::Value = client.get(&url).send().await
-        .map_err(|e| format!("{} network: {}", chain, e))?
-        .json().await.map_err(|e| format!("{} json: {}", chain, e))?;
-
-    // Get current block height from context
-    let tip_height = resp["context"]["state"].as_u64().unwrap_or(0);
-
-    let mut result = Vec::new();
-    let addr_data = &resp["data"][address];
-    
-    if let Some(txs) = addr_data["transactions"].as_array() {
-        for tx in txs.iter().take(10) {
-            let balance_change = tx["balance_change"].as_i64().unwrap_or(0);
-            if balance_change <= 0 { continue; } // only incoming
-            
-            let amount = balance_change as f64 / 100_000_000.0;
-            let tx_block = tx["block_id"].as_u64().unwrap_or(0);
-            
-            let confirmations = if tx_block > 0 && tip_height > 0 {
-                (tip_height - tx_block + 1) as u32
-            } else {
-                0 // unconfirmed
-            };
-            
-            if confirmations < required_confs {
-                result.push(BlockchainTransaction {
-                    hash: tx["hash"].as_str().unwrap_or("").to_string(),
-                    amount,
-                    confirmations,
-                    timestamp: NaiveDateTime::parse_from_str(
-                        tx["time"].as_str().unwrap_or("2000-01-01 00:00:00"),
-                        "%Y-%m-%d %H:%M:%S"
-                    ).map(|dt| dt.and_utc().timestamp()).unwrap_or(Utc::now().timestamp()),
-                });
-            }
-        }
-    }
-    Ok(result)
-}
-
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct Prices {
@@ -1003,10 +58,6 @@ pub struct Prices {
     pub aave: AssetPrice,
     pub near: AssetPrice,
     pub dash: AssetPrice,
-    pub xaut: AssetPrice,
-    pub rai: AssetPrice,
-    pub crv: AssetPrice,
-    pub paxg: AssetPrice,
     // Forex & Gold
     pub forex_jpy_per_usd: f64,
     pub forex_cny_per_usd: f64,
@@ -1060,267 +111,59 @@ fn get_db_path() -> String {
 
 fn init_db(conn: &Connection) -> Result<(), rusqlite::Error> {
     conn.execute(
-        "CREATE TABLE IF NOT EXISTS categories (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            color TEXT NOT NULL,
-            bar_color TEXT NOT NULL,
-            display_order INTEGER NOT NULL DEFAULT 0,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )", [],
-    )?;
-
-    conn.execute(
         "CREATE TABLE IF NOT EXISTS wallets (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            category_id INTEGER NOT NULL,
+            category TEXT NOT NULL DEFAULT 'bitcoin',
             asset TEXT NOT NULL,
             name TEXT NOT NULL,
             address TEXT,
             balance REAL,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE CASCADE
-    )", [],
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )", [],
     )?;
 
     conn.execute(
         "CREATE TABLE IF NOT EXISTS settings (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
-    )", [],
-    )?;
-
-    // Transaction history
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS tx_history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            tx_hash TEXT NOT NULL UNIQUE,
-            wallet_id INTEGER,
-            asset TEXT NOT NULL,
-            address TEXT NOT NULL,
-            amount REAL NOT NULL,
-            confirmations INTEGER DEFAULT 0,
-            timestamp INTEGER NOT NULL,
-            completed_at INTEGER NOT NULL
         )", [],
     )?;
 
-    // Profile security (PIN/password)
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS profile_security (
-            profile_name TEXT PRIMARY KEY,
-            pin_hash TEXT NOT NULL,
-            inactivity_minutes INTEGER DEFAULT 0
-        )", [],
-    )?;
-
-    let has_old_category: bool = conn
-    .prepare("SELECT COUNT(*) FROM pragma_table_info('wallets') WHERE name='category' AND type='TEXT'")?
-    .query_row([], |row| row.get::<_, i64>(0))
-    .map(|count| count > 0)
-    .unwrap_or(false);
-
-    if has_old_category {
-        println!("[MIGRATION V1→V2] Détection ancienne structure, migration en cours...");
-
-        let cat_count: i64 = conn.query_row("SELECT COUNT(*) FROM categories", [], |row| row.get(0)).unwrap_or(0);
-        if cat_count == 0 {
-            conn.execute(
-                "INSERT INTO categories (id, name, color, bar_color, display_order) VALUES (1, 'Bitcoin', 'text-amber-500', '#f59e0b', 0)",
-                         [],
-            )?;
-            conn.execute(
-                "INSERT INTO categories (id, name, color, bar_color, display_order) VALUES (2, 'Hedging', 'text-red-700', '#b91c1c', 1)",
-                         [],
-            )?;
-            conn.execute(
-                "INSERT INTO categories (id, name, color, bar_color, display_order) VALUES (3, 'Altcoins', 'text-violet-500', '#8b5cf6', 2)",
-                         [],
-            )?;
-        }
-
-        let has_category_id: bool = conn
-        .prepare("SELECT COUNT(*) FROM pragma_table_info('wallets') WHERE name='category_id'")?
+    let has_category: bool = conn
+        .prepare("SELECT COUNT(*) FROM pragma_table_info('wallets') WHERE name='category'")?
         .query_row([], |row| row.get::<_, i64>(0))
         .map(|count| count > 0)
         .unwrap_or(false);
 
-        if !has_category_id {
-            conn.execute("ALTER TABLE wallets ADD COLUMN category_id INTEGER", [])?;
-        }
-
-        conn.execute("UPDATE wallets SET category_id = 1 WHERE category = 'bitcoin'", [])?;
-        conn.execute("UPDATE wallets SET category_id = 2 WHERE category IN ('hedging', 'Hedging')", [])?;
-        conn.execute("UPDATE wallets SET category_id = 3 WHERE category IN ('altcoins', 'Altcoins')", [])?;
-
-        conn.execute(
-            "CREATE TABLE wallets_new (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                category_id INTEGER NOT NULL,
-                asset TEXT NOT NULL,
-                name TEXT NOT NULL,
-                address TEXT,
-                balance REAL,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE CASCADE
-        )", [],
-        )?;
-
-        conn.execute(
-            "INSERT INTO wallets_new (id, category_id, asset, name, address, balance, created_at, updated_at)
-        SELECT id, category_id, asset, name, address, balance, created_at, updated_at FROM wallets",
-        [],
-        )?;
-
-        conn.execute("DROP TABLE wallets", [])?;
-        conn.execute("ALTER TABLE wallets_new RENAME TO wallets", [])?;
-
-        println!("[MIGRATION V1→V2] Migration terminée !");
+    if !has_category {
+        conn.execute("ALTER TABLE wallets ADD COLUMN category TEXT NOT NULL DEFAULT 'bitcoin'", [])?;
+        conn.execute("UPDATE wallets SET category = 'bitcoin' WHERE asset = 'btc'", [])?;
+        conn.execute("UPDATE wallets SET category = 'hedging' WHERE asset IN ('xmr', 'bch', 'ltc')", [])?;
+        conn.execute("UPDATE wallets SET category = 'altcoins' WHERE asset NOT IN ('btc', 'xmr', 'bch', 'ltc')", [])?;
     }
 
-    let wallet_count: i64 = conn.query_row("SELECT COUNT(*) FROM wallets", [], |row| row.get(0))?;
-    let cat_count: i64 = conn.query_row("SELECT COUNT(*) FROM categories", [], |row| row.get(0)).unwrap_or(0);
-
-    if cat_count == 0 {
-        conn.execute(
-            "INSERT INTO categories (name, color, bar_color, display_order) VALUES ('Bitcoin', 'text-amber-500', '#f59e0b', 0)",
-                     [],
-        )?;
-        conn.execute(
-            "INSERT INTO categories (name, color, bar_color, display_order) VALUES ('Hedging', 'text-red-700', '#b91c1c', 1)",
-                     [],
-        )?;
-        conn.execute(
-            "INSERT INTO categories (name, color, bar_color, display_order) VALUES ('Altcoins', 'text-violet-500', '#8b5cf6', 2)",
-                     [],
-        )?;
+    let count: i64 = conn.query_row("SELECT COUNT(*) FROM wallets", [], |row| row.get(0))?;
+    if count == 0 {
+        // Bitcoin - 85%
+        conn.execute("INSERT INTO wallets (category, asset, name, address) VALUES ('bitcoin', 'btc', 'Cold Wallet 1', '')", [])?;
+        conn.execute("INSERT INTO wallets (category, asset, name, address) VALUES ('bitcoin', 'btc', 'Cold Wallet 2', '')", [])?;
+        conn.execute("INSERT INTO wallets (category, asset, name, address) VALUES ('bitcoin', 'btc', 'Cold Wallet 3', '')", [])?;
+        // Hedging - 7%
+        conn.execute("INSERT INTO wallets (category, asset, name, address) VALUES ('hedging', 'xmr', 'Monero Reserve 1', '')", [])?;
+        conn.execute("INSERT INTO wallets (category, asset, name, address) VALUES ('hedging', 'xmr', 'Monero Reserve 2', '')", [])?;
+        conn.execute("INSERT INTO wallets (category, asset, name, address) VALUES ('hedging', 'bch', 'BCH Wallet 1', '')", [])?;
+        conn.execute("INSERT INTO wallets (category, asset, name, address) VALUES ('hedging', 'bch', 'BCH Wallet 2', '')", [])?;
+        conn.execute("INSERT INTO wallets (category, asset, name, address) VALUES ('hedging', 'ltc', 'LTC Wallet', '')", [])?;
+        // Altcoins - 5%
+        conn.execute("INSERT INTO wallets (category, asset, name, address) VALUES ('altcoins', 'eth', 'Ethereum Wallet', '')", [])?;
+        conn.execute("INSERT INTO wallets (category, asset, name, address) VALUES ('altcoins', 'uni', 'Uniswap Wallet', '')", [])?;
+        conn.execute("INSERT INTO wallets (category, asset, name, address) VALUES ('altcoins', 'sol', 'Solana Wallet', '')", [])?;
+        conn.execute("INSERT INTO wallets (category, asset, name, address) VALUES ('altcoins', 'near', 'NEAR Wallet', '')", [])?;
     }
 
-    if wallet_count == 0 {
-        // Bitcoin
-        conn.execute("INSERT INTO wallets (category_id, asset, name, address) VALUES (1, 'btc', 'Cold Wallet 1', \"\")", [])?;
-        conn.execute("INSERT INTO wallets (category_id, asset, name, address) VALUES (1, 'btc', 'Cold Wallet 2', \"\")", [])?;
-        conn.execute("INSERT INTO wallets (category_id, asset, name, address) VALUES (1, 'btc', 'Cold Wallet 3', \"\")", [])?;
-        // Hedging
-        conn.execute("INSERT INTO wallets (category_id, asset, name, address) VALUES (2, 'bch', 'BCH Wallet 1', \"\")", [])?;
-        conn.execute("INSERT INTO wallets (category_id, asset, name, address) VALUES (2, 'bch', 'BCH Wallet 2', \"\")", [])?;
-        conn.execute("INSERT INTO wallets (category_id, asset, name, address) VALUES (2, 'ltc', 'LTC Wallet', \"\")", [])?;
-        conn.execute("INSERT INTO wallets (category_id, asset, name, address) VALUES (2, 'xmr', 'Monero Reserve', \"\")", [])?;
-        conn.execute("INSERT INTO wallets (category_id, asset, name, address) VALUES (2, 'xaut', 'Tether Gold', \"\")", [])?;
-        conn.execute("INSERT INTO wallets (category_id, asset, name, address) VALUES (2, 'rai', 'RAI Wallet', \"\")", [])?;
-        // Altcoins
-        conn.execute("INSERT INTO wallets (category_id, asset, name, address) VALUES (3, 'eth', 'Ethereum Wallet', \"\")", [])?;
-        conn.execute("INSERT INTO wallets (category_id, asset, name, address) VALUES (3, 'crv', 'Curve DAO Wallet', \"\")", [])?;
-        conn.execute("INSERT INTO wallets (category_id, asset, name, address) VALUES (3, 'dot', 'Polkadot Wallet', \"\")", [])?;
-    }
-
-    conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('etherscan_api_key', \"\")", [])?;
+    conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('etherscan_api_key', '')", [])?;
     conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('theme', 'dark')", [])?;
-    Ok(())
-}
-
-
-// ============================================================================
-// COMMANDES TAURI - CATEGORIES
-// ============================================================================
-
-#[tauri::command]
-fn get_categories(state: State<DbState>) -> Result<Vec<Category>, String> {
-    let conn = state.0.lock().map_err(|e| e.to_string())?;
-    let mut stmt = conn
-        .prepare("SELECT id, name, color, bar_color, display_order FROM categories ORDER BY display_order")
-        .map_err(|e| e.to_string())?;
-    let categories = stmt
-        .query_map([], |row| {
-            Ok(Category {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                color: row.get(2)?,
-                bar_color: row.get(3)?,
-                display_order: row.get(4)?,
-            })
-        })
-        .map_err(|e| e.to_string())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| e.to_string())?;
-    Ok(categories)
-}
-
-#[tauri::command]
-fn add_category(
-    state: State<DbState>,
-    name: String,
-    color: String,
-    bar_color: String,
-) -> Result<i64, String> {
-    let conn = state.0.lock().map_err(|e| e.to_string())?;
-    
-    let max_order: i32 = conn
-        .query_row(
-            "SELECT COALESCE(MAX(display_order), -1) FROM categories",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap_or(-1);
-
-    conn.execute(
-        "INSERT INTO categories (name, color, bar_color, display_order) VALUES (?1, ?2, ?3, ?4)",
-        params![name, color, bar_color, max_order + 1],
-    )
-    .map_err(|e| e.to_string())?;
-
-    Ok(conn.last_insert_rowid())
-}
-
-#[tauri::command]
-fn update_category(
-    state: State<DbState>,
-    id: i64,
-    name: String,
-    color: String,
-    bar_color: String,
-) -> Result<(), String> {
-    let conn = state.0.lock().map_err(|e| e.to_string())?;
-    conn.execute(
-        "UPDATE categories SET name = ?1, color = ?2, bar_color = ?3 WHERE id = ?4",
-        params![name, color, bar_color, id],
-    )
-    .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-#[tauri::command]
-fn delete_category(state: State<DbState>, id: i64) -> Result<(), String> {
-    let conn = state.0.lock().map_err(|e| e.to_string())?;
-    
-    let count: i64 = conn
-        .query_row("SELECT COUNT(*) FROM categories", [], |row| row.get(0))
-        .map_err(|e| e.to_string())?;
-    
-    if count <= 1 {
-        return Err("Impossible de supprimer la dernière catégorie".to_string());
-    }
-    
-    conn.execute("DELETE FROM categories WHERE id = ?1", params![id])
-        .map_err(|e| e.to_string())?;
-    
-    Ok(())
-}
-
-#[tauri::command]
-fn reorder_categories(state: State<DbState>, category_ids: Vec<i64>) -> Result<(), String> {
-    let conn = state.0.lock().map_err(|e| e.to_string())?;
-    
-    for (index, category_id) in category_ids.iter().enumerate() {
-        conn.execute(
-            "UPDATE categories SET display_order = ?1 WHERE id = ?2",
-            params![index as i32, category_id],
-        )
-        .map_err(|e| e.to_string())?;
-    }
-    
     Ok(())
 }
 
@@ -1332,13 +175,13 @@ fn reorder_categories(state: State<DbState>, category_ids: Vec<i64>) -> Result<(
 fn get_wallets(state: State<DbState>) -> Result<Vec<Wallet>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     let mut stmt = conn
-        .prepare("SELECT id, category_id, asset, name, address, balance FROM wallets ORDER BY id")
+        .prepare("SELECT id, category, asset, name, address, balance FROM wallets ORDER BY id")
         .map_err(|e| e.to_string())?;
     let wallets = stmt
         .query_map([], |row| {
             Ok(Wallet {
                 id: row.get(0)?,
-                category_id: row.get(1)?,
+                category: row.get(1)?,
                 asset: row.get(2)?,
                 name: row.get(3)?,
                 address: row.get(4)?,
@@ -1362,11 +205,11 @@ fn update_wallet(state: State<DbState>, id: i64, name: String, address: String, 
 }
 
 #[tauri::command]
-fn add_wallet(state: State<DbState>, category_id: i64, asset: String, name: String) -> Result<i64, String> {
+fn add_wallet(state: State<DbState>, category: String, asset: String, name: String) -> Result<i64, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     conn.execute(
-        "INSERT INTO wallets (category_id, asset, name, address) VALUES (?1, ?2, ?3, \"\")",
-        params![category_id, asset, name],
+        "INSERT INTO wallets (category, asset, name, address) VALUES (?1, ?2, ?3, '')",
+        params![category, asset, name],
     ).map_err(|e| e.to_string())?;
     Ok(conn.last_insert_rowid())
 }
@@ -1450,29 +293,6 @@ fn get_altcoins_list() -> Vec<AltcoinInfo> {
         AltcoinInfo { symbol: "xrp".to_string(), name: "XRP".to_string(), can_fetch: true, fetch_type: "xrpl".to_string() },
         AltcoinInfo { symbol: "near".to_string(), name: "NEAR Protocol".to_string(), can_fetch: true, fetch_type: "near-rpc".to_string() },
         AltcoinInfo { symbol: "dash".to_string(), name: "Dash".to_string(), can_fetch: true, fetch_type: "blockchair".to_string() },
-
-        // Stablecoins
-        AltcoinInfo { symbol: "usdt".to_string(), name: "Tether USD".to_string(), can_fetch: true, fetch_type: "etherscan".to_string() },
-        AltcoinInfo { symbol: "usdc".to_string(), name: "USD Coin".to_string(), can_fetch: true, fetch_type: "etherscan".to_string() },
-        AltcoinInfo { symbol: "dai".to_string(), name: "Dai Stablecoin".to_string(), can_fetch: true, fetch_type: "etherscan".to_string() },
-        AltcoinInfo { symbol: "eurc".to_string(), name: "Euro Coin".to_string(), can_fetch: true, fetch_type: "etherscan".to_string() },
-        AltcoinInfo { symbol: "rai".to_string(), name: "Rai Reflex Index".to_string(), can_fetch: true, fetch_type: "etherscan".to_string() },
-
-        // Or tokenisé
-        AltcoinInfo { symbol: "xaut".to_string(), name: "Tether Gold".to_string(), can_fetch: true, fetch_type: "etherscan".to_string() },
-        AltcoinInfo { symbol: "paxg".to_string(), name: "PAX Gold".to_string(), can_fetch: true, fetch_type: "etherscan".to_string() },
-
-        // DeFi
-        AltcoinInfo { symbol: "par".to_string(), name: "Parallel".to_string(), can_fetch: true, fetch_type: "etherscan".to_string() },
-        AltcoinInfo { symbol: "wbtc".to_string(), name: "Wrapped Bitcoin".to_string(), can_fetch: true, fetch_type: "etherscan".to_string() },
-        AltcoinInfo { symbol: "mkr".to_string(), name: "Maker".to_string(), can_fetch: true, fetch_type: "etherscan".to_string() },
-        AltcoinInfo { symbol: "crv".to_string(), name: "Curve DAO".to_string(), can_fetch: true, fetch_type: "etherscan".to_string() },
-        AltcoinInfo { symbol: "frax".to_string(), name: "Frax".to_string(), can_fetch: true, fetch_type: "etherscan".to_string() },
-        AltcoinInfo { symbol: "lusd".to_string(), name: "Liquity USD".to_string(), can_fetch: true, fetch_type: "etherscan".to_string() },
-
-        // Layer 2
-        AltcoinInfo { symbol: "matic".to_string(), name: "Polygon".to_string(), can_fetch: true, fetch_type: "etherscan".to_string() },
-        AltcoinInfo { symbol: "arb".to_string(), name: "Arbitrum".to_string(), can_fetch: true, fetch_type: "etherscan".to_string() },
     ]
 }
 
@@ -1515,8 +335,6 @@ async fn get_prices() -> Result<Prices, String> {
         "NEARUSDT", "NEAREUR", "NEARBTC",
         // DASH
         "DASHUSDT", "DASHBTC",
-        // CRV (Curve DAO)
-        "CRVUSDT", "CRVBTC",
         // PAXG = 1 troy oz gold tokenized
         "PAXGUSDT",
     ];
@@ -1586,11 +404,8 @@ async fn get_prices() -> Result<Prices, String> {
                             // DASH
                             "DASHUSDT" => prices.dash.usd = price,
                             "DASHBTC" => prices.dash.btc = price,
-                            // CRV (Curve DAO)
-                            "CRVUSDT" => prices.crv.usd = price,
-                            "CRVBTC" => prices.crv.btc = price,
                             // Gold (PAXG = 1 troy oz)
-                            "PAXGUSDT" => { prices.gold_usd_per_oz = price; prices.paxg.usd = price; },
+                            "PAXGUSDT" => prices.gold_usd_per_oz = price,
                             _ => {}
                         }
                     }
@@ -1599,8 +414,8 @@ async fn get_prices() -> Result<Prices, String> {
         }
     }
 
-    // XMR + XAUT from Bitfinex
-    let bitfinex_url = "https://api-pub.bitfinex.com/v2/tickers?symbols=tXMRUSD,tXMRBTC,tXAUTUSD,tXAUTBTC";
+    // XMR from Bitfinex
+    let bitfinex_url = "https://api-pub.bitfinex.com/v2/tickers?symbols=tXMRUSD,tXMRBTC";
     if let Ok(response) = client.get(bitfinex_url).send().await {
         if response.status().is_success() {
             if let Ok(text) = response.text().await {
@@ -1625,67 +440,22 @@ async fn get_prices() -> Result<Prices, String> {
                 if prices.xmr.usd > 0.0 && prices.btc.eur > 0.0 && prices.btc.usd > 0.0 {
                     prices.xmr.eur = prices.xmr.usd * (prices.btc.eur / prices.btc.usd);
                 }
-                // XAUT (Tether Gold)
-                if let Some(start) = text.find("[\"tXAUTUSD\"") {
-                    let substr = &text[start..];
-                    let parts: Vec<&str> = substr.split(',').collect();
-                    if parts.len() >= 8 {
-                        if let Ok(usd_price) = parts[7].parse::<f64>() {
-                            prices.xaut.usd = usd_price;
-                        }
-                    }
-                }
-                if let Some(start) = text.find("[\"tXAUTBTC\"") {
-                    let substr = &text[start..];
-                    let parts: Vec<&str> = substr.split(',').collect();
-                    if parts.len() >= 8 {
-                        if let Ok(btc_price) = parts[7].parse::<f64>() {
-                            prices.xaut.btc = btc_price;
-                        }
-                    }
-                }
             }
         }
     }
 
-    // RAI from CoinGecko (free, no key)
-    let rai_url = "https://api.coingecko.com/api/v3/simple/price?ids=rai&vs_currencies=usd,btc";
-    if let Ok(response) = client.get(rai_url).send().await {
-        if response.status().is_success() {
-            if let Ok(data) = response.json::<serde_json::Value>().await {
-                if let Some(rai_data) = data.get("rai") {
-                    if let Some(v) = rai_data.get("usd").and_then(|v| v.as_f64()) { prices.rai.usd = v; }
-                    if let Some(v) = rai_data.get("btc").and_then(|v| v.as_f64()) { prices.rai.btc = v; }
-                }
-            }
-        }
-    }
-
-    // Generic EUR derivation for ALL assets missing EUR price
+    // Derived EUR prices for assets without EUR pairs on Binance
     if prices.btc.eur > 0.0 && prices.btc.usd > 0.0 {
         let eur_per_usd = prices.btc.eur / prices.btc.usd;
-
-        // Helper macro: derive EUR from USD, or from BTC if no USD
-        macro_rules! derive_eur {
-            ($asset:expr) => {
-                if $asset.eur == 0.0 {
-                    if $asset.usd > 0.0 {
-                        $asset.eur = $asset.usd * eur_per_usd;
-                    } else if $asset.btc > 0.0 {
-                        $asset.usd = $asset.btc * prices.btc.usd;
-                        $asset.eur = $asset.btc * prices.btc.eur;
-                    }
-                }
-            };
+        // DASH: has USD and BTC but no EUR
+        if prices.dash.usd > 0.0 {
+            prices.dash.eur = prices.dash.usd * eur_per_usd;
         }
-
-        derive_eur!(prices.dash);
-        derive_eur!(prices.pivx);
-        derive_eur!(prices.xaut);
-        derive_eur!(prices.rai);
-        derive_eur!(prices.crv);
-        derive_eur!(prices.paxg);
-        derive_eur!(prices.qtum);
+        // PIVX: only has BTC/ETH pairs, compute USD and EUR from BTC
+        if prices.pivx.btc > 0.0 {
+            prices.pivx.usd = prices.pivx.btc * prices.btc.usd;
+            prices.pivx.eur = prices.pivx.btc * prices.btc.eur;
+        }
     }
 
     // Forex via frankfurter.app (free, no key) — all currencies from USD
@@ -1742,8 +512,11 @@ async fn get_prices() -> Result<Prices, String> {
     // Actually frankfurter gives: from=USD to=... so forex_gbp_per_usd = how many GBP per 1 USD
     // We need EUR per 1 USD from Binance: BTC_EUR / BTC_USD gives EUR/USD indirectly
     if prices.btc.eur > 0.0 && prices.btc.usd > 0.0 {
-        // EUR/USD: if BTCUSD=67000 and BTCEUR=57000, then 1 EUR = 67000/57000 = 1.175 USD
         prices.eurusd = prices.btc.usd / prices.btc.eur;
+        // Actually EUR/USD means "1 EUR = X USD", so:
+        prices.eurusd = prices.btc.usd / prices.btc.eur;
+        // Wait: if BTCUSD=67000 and BTCEUR=57000, then 1 EUR = 67000/57000 = 1.175 USD
+        // That's correct: EUR/USD = BTCUSD / BTCEUR
     }
 
     // DXY (US Dollar Index) — synthetic calculation from official ICE weights:
@@ -2840,32 +1613,14 @@ fn list_profiles() -> Result<Vec<String>, String> {
 #[tauri::command]
 fn save_profile(state: State<DbState>, name: String, theme: Option<String>) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    
-    let mut cat_stmt = conn
-        .prepare("SELECT id, name, color, bar_color, display_order FROM categories ORDER BY display_order")
+    let mut stmt = conn
+        .prepare("SELECT id, category, asset, name, address, balance FROM wallets ORDER BY id")
         .map_err(|e| e.to_string())?;
-    let categories: Vec<Category> = cat_stmt
-        .query_map([], |row| {
-            Ok(Category {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                color: row.get(2)?,
-                bar_color: row.get(3)?,
-                display_order: row.get(4)?,
-            })
-        })
-        .map_err(|e| e.to_string())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| e.to_string())?;
-    
-    let mut wallet_stmt = conn
-        .prepare("SELECT id, category_id, asset, name, address, balance FROM wallets ORDER BY id")
-        .map_err(|e| e.to_string())?;
-    let wallets: Vec<Wallet> = wallet_stmt
+    let wallets: Vec<Wallet> = stmt
         .query_map([], |row| {
             Ok(Wallet {
                 id: row.get(0)?,
-                category_id: row.get(1)?,
+                category: row.get(1)?,
                 asset: row.get(2)?,
                 name: row.get(3)?,
                 address: row.get(4)?,
@@ -2876,7 +1631,7 @@ fn save_profile(state: State<DbState>, name: String, theme: Option<String>) -> R
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| e.to_string())?;
 
-    let data = ProfileData { categories, wallets, theme };
+    let data = ProfileData { wallets, theme };
     let json = serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?;
     let path = get_profiles_dir().join(format!("{}.json", name));
     std::fs::write(path, json).map_err(|e| e.to_string())?;
@@ -2888,29 +1643,23 @@ fn load_profile(state: State<DbState>, name: String) -> Result<LoadProfileResult
     let path = get_profiles_dir().join(format!("{}.json", name));
     let json = std::fs::read_to_string(&path).map_err(|e| format!("Profil introuvable: {}", e))?;
 
-    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    // Try new format (ProfileData with theme) first, then old format (Vec<Wallet>)
+    let (wallets, saved_theme) = if let Ok(data) = serde_json::from_str::<ProfileData>(&json) {
+        (data.wallets, data.theme)
+    } else {
+        let wallets: Vec<Wallet> = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+        (wallets, None)
+    };
 
-    if let Ok(data) = serde_json::from_str::<ProfileData>(&json) {
-        conn.execute("DELETE FROM categories", []).map_err(|e| e.to_string())?;
-        for cat in data.categories {
-            conn.execute(
-                "INSERT INTO categories (id, name, color, bar_color, display_order) VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![cat.id, cat.name, cat.color, cat.bar_color, cat.display_order],
-            ).map_err(|e| e.to_string())?;
-        }
-        
-        conn.execute("DELETE FROM wallets", []).map_err(|e| e.to_string())?;
-        for w in data.wallets {
-            conn.execute(
-                "INSERT INTO wallets (category_id, asset, name, address, balance) VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![w.category_id, w.asset, w.name, w.address, w.balance],
-            ).map_err(|e| e.to_string())?;
-        }
-        
-        return Ok(LoadProfileResult { theme: data.theme });
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM wallets", []).map_err(|e| e.to_string())?;
+    for w in wallets {
+        conn.execute(
+            "INSERT INTO wallets (category, asset, name, address, balance) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![w.category, w.asset, w.name, w.address, w.balance],
+        ).map_err(|e| e.to_string())?;
     }
-    
-    Err("Format de profil non supporté - utilisez un profil V2".to_string())
+    Ok(LoadProfileResult { theme: saved_theme })
 }
 
 #[tauri::command]
@@ -2924,53 +1673,20 @@ fn delete_profile(name: String) -> Result<(), String> {
 fn reset_wallets(state: State<DbState>) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     conn.execute("DELETE FROM wallets", []).map_err(|e| e.to_string())?;
-    conn.execute("DELETE FROM categories", []).map_err(|e| e.to_string())?;
 
-    // Re-insert default_template categories
-    conn.execute("INSERT INTO categories (name, color, bar_color, display_order) VALUES ('Bitcoin', 'text-amber-500', '#f59e0b', 0)", []).map_err(|e| e.to_string())?;
-    conn.execute("INSERT INTO categories (name, color, bar_color, display_order) VALUES ('Hedging', 'text-red-700', '#b91c1c', 1)", []).map_err(|e| e.to_string())?;
-    conn.execute("INSERT INTO categories (name, color, bar_color, display_order) VALUES ('Altcoins', 'text-violet-500', '#8b5cf6', 2)", []).map_err(|e| e.to_string())?;
-
-    // Get the new category IDs
-    let cat_btc: i64 = conn.query_row("SELECT id FROM categories WHERE name = 'Bitcoin'", [], |row| row.get(0)).map_err(|e| e.to_string())?;
-    let cat_hedge: i64 = conn.query_row("SELECT id FROM categories WHERE name = 'Hedging'", [], |row| row.get(0)).map_err(|e| e.to_string())?;
-    let cat_alt: i64 = conn.query_row("SELECT id FROM categories WHERE name = 'Altcoins'", [], |row| row.get(0)).map_err(|e| e.to_string())?;
-
-    // Re-insert default_template wallets
-    // Bitcoin
-    conn.execute("INSERT INTO wallets (category_id, asset, name, address) VALUES (?1, 'btc', 'Cold Wallet 1', \"\")", params![cat_btc]).map_err(|e| e.to_string())?;
-    conn.execute("INSERT INTO wallets (category_id, asset, name, address) VALUES (?1, 'btc', 'Cold Wallet 2', \"\")", params![cat_btc]).map_err(|e| e.to_string())?;
-    conn.execute("INSERT INTO wallets (category_id, asset, name, address) VALUES (?1, 'btc', 'Cold Wallet 3', \"\")", params![cat_btc]).map_err(|e| e.to_string())?;
-    // Hedging
-    conn.execute("INSERT INTO wallets (category_id, asset, name, address) VALUES (?1, 'bch', 'BCH Wallet 1', \"\")", params![cat_hedge]).map_err(|e| e.to_string())?;
-    conn.execute("INSERT INTO wallets (category_id, asset, name, address) VALUES (?1, 'bch', 'BCH Wallet 2', \"\")", params![cat_hedge]).map_err(|e| e.to_string())?;
-    conn.execute("INSERT INTO wallets (category_id, asset, name, address) VALUES (?1, 'ltc', 'LTC Wallet', \"\")", params![cat_hedge]).map_err(|e| e.to_string())?;
-    conn.execute("INSERT INTO wallets (category_id, asset, name, address) VALUES (?1, 'xmr', 'Monero Reserve', \"\")", params![cat_hedge]).map_err(|e| e.to_string())?;
-    conn.execute("INSERT INTO wallets (category_id, asset, name, address) VALUES (?1, 'xaut', 'Tether Gold', \"\")", params![cat_hedge]).map_err(|e| e.to_string())?;
-    conn.execute("INSERT INTO wallets (category_id, asset, name, address) VALUES (?1, 'rai', 'RAI Wallet', \"\")", params![cat_hedge]).map_err(|e| e.to_string())?;
-    // Altcoins
-    conn.execute("INSERT INTO wallets (category_id, asset, name, address) VALUES (?1, 'eth', 'Ethereum Wallet', \"\")", params![cat_alt]).map_err(|e| e.to_string())?;
-    conn.execute("INSERT INTO wallets (category_id, asset, name, address) VALUES (?1, 'crv', 'Curve DAO Wallet', \"\")", params![cat_alt]).map_err(|e| e.to_string())?;
-    conn.execute("INSERT INTO wallets (category_id, asset, name, address) VALUES (?1, 'dot', 'Polkadot Wallet', \"\")", params![cat_alt]).map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-#[tauri::command]
-fn save_csv_file(path: String, content: String) -> Result<(), String> {
-    std::fs::write(&path, content.as_bytes()).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-fn get_home_dir() -> Result<String, String> {
-    std::env::var("HOME").map_err(|_| "HOME not set".into())
-}
-
-#[tauri::command]
-fn open_url(url: String) -> Result<(), String> {
-    std::process::Command::new("xdg-open")
-        .arg(&url)
-        .spawn()
-        .map_err(|e| e.to_string())?;
+    // Re-insert default template
+    conn.execute("INSERT INTO wallets (category, asset, name, address) VALUES ('bitcoin', 'btc', 'Cold Wallet 1', '')", []).map_err(|e| e.to_string())?;
+    conn.execute("INSERT INTO wallets (category, asset, name, address) VALUES ('bitcoin', 'btc', 'Cold Wallet 2', '')", []).map_err(|e| e.to_string())?;
+    conn.execute("INSERT INTO wallets (category, asset, name, address) VALUES ('bitcoin', 'btc', 'Cold Wallet 3', '')", []).map_err(|e| e.to_string())?;
+    conn.execute("INSERT INTO wallets (category, asset, name, address) VALUES ('hedging', 'xmr', 'Monero Reserve 1', '')", []).map_err(|e| e.to_string())?;
+    conn.execute("INSERT INTO wallets (category, asset, name, address) VALUES ('hedging', 'xmr', 'Monero Reserve 2', '')", []).map_err(|e| e.to_string())?;
+    conn.execute("INSERT INTO wallets (category, asset, name, address) VALUES ('hedging', 'bch', 'BCH Wallet 1', '')", []).map_err(|e| e.to_string())?;
+    conn.execute("INSERT INTO wallets (category, asset, name, address) VALUES ('hedging', 'bch', 'BCH Wallet 2', '')", []).map_err(|e| e.to_string())?;
+    conn.execute("INSERT INTO wallets (category, asset, name, address) VALUES ('hedging', 'ltc', 'LTC Wallet', '')", []).map_err(|e| e.to_string())?;
+    conn.execute("INSERT INTO wallets (category, asset, name, address) VALUES ('altcoins', 'eth', 'Ethereum Wallet', '')", []).map_err(|e| e.to_string())?;
+    conn.execute("INSERT INTO wallets (category, asset, name, address) VALUES ('altcoins', 'uni', 'Uniswap Wallet', '')", []).map_err(|e| e.to_string())?;
+    conn.execute("INSERT INTO wallets (category, asset, name, address) VALUES ('altcoins', 'sol', 'Solana Wallet', '')", []).map_err(|e| e.to_string())?;
+    conn.execute("INSERT INTO wallets (category, asset, name, address) VALUES ('altcoins', 'near', 'NEAR Wallet', '')", []).map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -2984,36 +1700,10 @@ pub fn run() {
     let conn = Connection::open(&db_path).expect("Impossible d'ouvrir la base de données");
     init_db(&conn).expect("Impossible d'initialiser la base de données");
 
-    // Charger le setting monitoring_enabled
-    let monitoring_enabled = conn
-    .query_row(
-        "SELECT value FROM settings WHERE key = 'monitoring_enabled'",
-        [],
-        |row| row.get::<_, String>(0),
-    )
-    .unwrap_or("true".to_string()) == "true";
-
-    // Créer l'état de monitoring
-    let monitoring_state = Arc::new(TokioMutex::new(MonitoringState {
-        enabled: monitoring_enabled,
-        ..Default::default()
-    }));
-
     tauri::Builder::default()
-    .plugin(tauri_plugin_shell::init())
-    .manage(DbState(Mutex::new(conn)))
-    .manage(monitoring_state.clone())  // ✨ NOUVEAU
-    .setup(move |app| {
-        // Démarrer la tâche de monitoring
-        start_monitoring_task(monitoring_state.clone(), app.handle().clone(), std::path::PathBuf::from(db_path.clone()));
-        Ok(())
-    })
-    .invoke_handler(tauri::generate_handler![
-            get_categories,
-            add_category,
-            update_category,
-            delete_category,
-            reorder_categories,
+        .plugin(tauri_plugin_shell::init())
+        .manage(DbState(Mutex::new(conn)))
+        .invoke_handler(tauri::generate_handler![
             get_wallets,
             update_wallet,
             add_wallet,
@@ -3030,20 +1720,6 @@ pub fn run() {
             load_profile,
             delete_profile,
             reset_wallets,
-            open_url,
-            get_pending_transactions,        // ✨ NOUVEAU
-            set_monitoring_enabled,          // ✨ NOUVEAU
-            start_monitoring_wallet,         // ✨ NOUVEAU
-            stop_monitoring_wallet,          // ✨ NOUVEAU
-            clear_pending_transaction,       // ✨ NOUVEAU
-            get_tx_history,                  // ✨ HISTORIQUE TX
-            fetch_address_history,           // ✨ HISTORIQUE BLOCKCHAIN
-            save_csv_file,                   // 📄 EXPORT CSV
-            get_home_dir,                    // 🏠 HOME DIR
-            get_profile_security,            // 🔒 PIN
-            set_profile_pin,
-            verify_profile_pin,
-            remove_profile_pin,
         ])
         .run(tauri::generate_context!())
         .expect("Erreur lors du lancement de l'application");

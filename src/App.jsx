@@ -1,6 +1,9 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { QRCodeSVG } from 'qrcode.react';
+import PendingTransactionsPanel from './PendingTransactionsPanel';
+import TokenSearch from './TokenSearch';
+import { NoctaliMoon, NoctaliImages, NoctaliStarfield, LunarPunkMoon, LunarPunkDunes, LunarPunkDust } from './themes';
 
 // ── SVG Icons ──
 const EyeIcon = () => (
@@ -92,138 +95,53 @@ const themes = {
     accent: 'text-[#F4D995]', accentBg: 'bg-[#F4D995]', accentBorder: 'border-[#F4D995]',
     accentMuted: 'text-[#F4D995]/70', accentHover: 'hover:bg-[#f6e0a8]',
   },
+  lunarpunk: {
+    // Lunar Punk: deep space + sapphire blue + purple accents
+    bg: 'bg-[#08071a]', textMain: 'text-[#c8cde8]', textMuted: 'text-[#5a62a0]', textFaint: 'text-[#3a3f70]',
+    cardBg: 'bg-[#0d0c24]', cardBorder: 'border-[#1a1840]', cardBg2: 'bg-[#12103a]', cardBorder2: 'border-[#252260]',
+    inputBg: 'bg-[#100e2a]', inputBorder: 'border-[#252260]',
+    headerBg: 'bg-[#08071a]/95', headerBorder: 'border-[#1a1840]',
+    rowBg: 'bg-[#0b0a20]', rowBorder: 'border-[#1a1840]', rowHover: 'hover:bg-[#12103a]',
+    dropBg: 'bg-[#100e2a]', dropBorder: 'border-[#252260]',
+    barBg: 'bg-[#1a1840]', divider: 'border-[#1a1840]',
+    accent: 'text-[#6d8ff8]', accentBg: 'bg-[#6d8ff8]', accentBorder: 'border-[#6d8ff8]',
+    accentMuted: 'text-[#6d8ff8]/70', accentHover: 'hover:bg-[#8aa4fa]',
+  },
 };
 
-// ── Noctali theme decorations ──
-// Images: place noctali-dark.png, noctali-moon.png, noctali-white.png in public/
 
-// Plasma crescent moon — realistic with craters, whiter
-const NoctaliMoon = () => (
-  <div className="fixed pointer-events-none" style={{ top: 40, left: 10, zIndex: 20 }}>
-    <style>{`
-      @keyframes moon-breathe {
-        0%,100% { filter: drop-shadow(0 0 8px rgba(240,242,250,0.3)) drop-shadow(0 0 25px rgba(220,225,240,0.12)); }
-        50% { filter: drop-shadow(0 0 15px rgba(248,250,255,0.5)) drop-shadow(0 0 40px rgba(220,225,240,0.2)); }
-      }
-      @keyframes moon-sparkle { 0%,100% { opacity:0; transform:scale(0.3); } 50% { opacity:1; transform:scale(1.3); } }
-    `}</style>
-    <svg width="150" height="150" viewBox="0 0 150 150" fill="none"
-      style={{ animation: 'moon-breathe 6s ease-in-out infinite' }}>
-      <defs>
-        <radialGradient id="moonSurf" cx="40%" cy="36%" r="52%">
-          <stop offset="0%" stopColor="#fcfcff" />
-          <stop offset="20%" stopColor="#eef0f8" />
-          <stop offset="45%" stopColor="#dce0ee" />
-          <stop offset="70%" stopColor="#b8bdd0" />
-          <stop offset="100%" stopColor="#9098ac" />
-        </radialGradient>
-        <filter id="softM"><feGaussianBlur stdDeviation="0.5" /></filter>
-      </defs>
-      {/* Crescent mask — no background circle */}
-      <mask id="cMask">
-        <rect width="150" height="150" fill="white" />
-        <circle cx="92" cy="58" r="43" fill="black" />
-      </mask>
-      {/* Moon surface */}
-      <circle cx="68" cy="68" r="45" fill="url(#moonSurf)" mask="url(#cMask)" filter="url(#softM)" />
-      {/* Craters — subtle dark circles with rim highlights */}
-      <circle cx="46" cy="52" r="6" fill="#a8aec0" opacity="0.3" mask="url(#cMask)" />
-      <circle cx="46" cy="52" r="6" stroke="#c8ccd8" strokeWidth="0.5" fill="none" opacity="0.25" mask="url(#cMask)" />
-      <circle cx="40" cy="72" r="4.5" fill="#a0a8bc" opacity="0.25" mask="url(#cMask)" />
-      <circle cx="40" cy="72" r="4.5" stroke="#c0c4d4" strokeWidth="0.4" fill="none" opacity="0.2" mask="url(#cMask)" />
-      <circle cx="54" cy="84" r="3" fill="#a8b0c0" opacity="0.2" mask="url(#cMask)" />
-      <circle cx="34" cy="88" r="2.5" fill="#a0a8b8" opacity="0.2" mask="url(#cMask)" />
-      <circle cx="50" cy="66" r="2.5" fill="#a4aab8" opacity="0.22" mask="url(#cMask)" />
-      <circle cx="36" cy="60" r="4" fill="#a8aec4" opacity="0.2" mask="url(#cMask)" />
-      <circle cx="36" cy="60" r="4" stroke="#c4c8d8" strokeWidth="0.4" fill="none" opacity="0.18" mask="url(#cMask)" />
-      <circle cx="28" cy="78" r="2" fill="#a0a8b8" opacity="0.18" mask="url(#cMask)" />
-      {/* Bright limb highlight */}
-      <circle cx="68" cy="68" r="44.5" stroke="#f0f2fc" strokeWidth="0.5" fill="none" mask="url(#cMask)" opacity="0.5" />
-    </svg>
-    {/* Sparkle pixels */}
-    {[
-      {x:-12,y:-18,s:3.5,d:0},{x:135,y:-8,s:3,d:.7},{x:-18,y:65,s:3,d:1.4},{x:140,y:88,s:3.5,d:.3},
-      {x:8,y:140,s:3,d:2},{x:118,y:135,s:3,d:1},{x:68,y:-22,s:3,d:2.8},{x:145,y:40,s:3,d:1.6},
-      {x:-22,y:108,s:3.5,d:.5},{x:78,y:145,s:3,d:2.4},{x:-8,y:28,s:3,d:3.2},{x:128,y:118,s:3,d:.1},
-    ].map((sp,i) => (
-      <div key={i} className="absolute rounded-full" style={{
-        left:sp.x,top:sp.y,width:sp.s,height:sp.s,
-        backgroundColor: i % 4 === 0 ? '#F4D995' : '#dde2f0',
-        boxShadow: i % 4 === 0 ? '0 0 5px #F4D995' : '0 0 4px rgba(220,225,240,0.5)',
-        animation:`moon-sparkle ${1.8+(i%3)*0.5}s ease-in-out ${sp.d}s infinite`,
-      }} />
-    ))}
-  </div>
-);
-
-// Real Noctali illustrations (from public/ folder)
-const NoctaliImages = () => (
-  <>
-    {/* Bottom-left: standing Noctali on dark bg */}
-    <img src="/noctali-dark.png" alt="" className="fixed pointer-events-none"
-      style={{ left: 10, bottom: 20, width: 200, height: 200, objectFit: 'contain', opacity: 0.7, zIndex: 20 }} />
-    {/* Header area: standing Noctali — next to title */}
-    <img src="/noctali-white.png" alt="" className="fixed pointer-events-none"
-      style={{ right: 110, top: 22, width: 100, height: 100, objectFit: 'contain', opacity: 0.6, zIndex: 20,
-        filter: 'brightness(0.7) contrast(1.1)', mixBlendMode: 'lighten' }} />
-  </>
-);
-
-// Animated twinkling stars — Milky Way effect
-const NoctaliStarfield = () => {
-  const stars = [];
-  for (let i = 0; i < 120; i++) {
-    const x = ((i * 137.508) % 100);
-    const y = ((i * 97.31 + 23) % 100);
-    const size = (i % 7 === 0) ? 3.5 : (i % 5 === 0) ? 2.5 : (i % 3 === 0) ? 2 : 1.2;
-    const delay = (i * 0.31) % 6;
-    const dur = 2.5 + (i % 4);
-    const isGold = i % 5 === 0;
-    stars.push({ x, y, size, delay, dur, isGold });
-  }
-  return (
-    <div className="fixed inset-0 pointer-events-none overflow-hidden" style={{ zIndex: 1 }}>
-      <style>{`
-        @keyframes noctali-twinkle {
-          0%, 100% { opacity: 0.15; }
-          50% { opacity: 1; }
-        }
-      `}</style>
-      {stars.map((s, i) => (
-        <div key={i} className="absolute rounded-full"
-          style={{
-            left: `${s.x}%`, top: `${s.y}%`,
-            width: s.size, height: s.size,
-            backgroundColor: s.isGold ? '#F4D995' : '#8090c0',
-            boxShadow: s.isGold ? '0 0 4px #F4D995' : (s.size > 2 ? '0 0 3px #8090c0' : 'none'),
-            animation: `noctali-twinkle ${s.dur}s ease-in-out ${s.delay}s infinite`,
-          }} />
-      ))}
-      <div className="absolute inset-0" style={{
-        background: 'linear-gradient(135deg, transparent 25%, rgba(100,120,200,0.04) 40%, rgba(244,217,149,0.02) 50%, rgba(100,120,200,0.04) 60%, transparent 75%)',
-      }} />
-    </div>
-  );
-};
 
 const App = () => {
   const [wallets, setWallets] = useState([]);
+  const [categories, setCategories] = useState([]);
+  const [editingCatId, setEditingCatId] = useState(null);
+  const [catNameDraft, setCatNameDraft] = useState('');
+  const [showPendingPanel, setShowPendingPanel] = useState(false);
+  const [monitoringEnabled, setMonitoringEnabled] = useState(true);
+  const [pendingCount, setPendingCount] = useState(0);
+  const [pendingBarHidden, setPendingBarHidden] = useState(false);
   const [prices, setPrices] = useState({});
   const [altcoinsList, setAltcoinsList] = useState([]);
   const [editMode, setEditMode] = useState(null);
   const [editData, setEditData] = useState({ address: '', balance: '', name: '' });
-  const [altcoinSearch, setAltcoinSearch] = useState('');
-  const [showAltcoinDropdown, setShowAltcoinDropdown] = useState(false);
   const [loading, setLoading] = useState({});
   const [lastPriceUpdate, setLastPriceUpdate] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
   const [hideBalances, setHideBalances] = useState(false);
-  const [showSettings, setShowSettings] = useState(false);
+  const [showMenuDrawer, setShowMenuDrawer] = useState(false);
+  const [menuView, setMenuView] = useState('main'); // 'main' | 'profiles' | 'settings' | 'security'
+  const [showWhitepaper, setShowWhitepaper] = useState(false);
+
+  // ── PIN / Lock ──
+  const [isLocked, setIsLocked] = useState(false);
+  const [pinInput, setPinInput] = useState('');
+  const [pinError, setPinError] = useState('');
+  const [profileSecurity, setProfileSecurity] = useState({ has_pin: false, inactivity_minutes: 0 });
+  const inactivityTimerRef = useRef(null);
   const [etherscanApiKey, setEtherscanApiKey] = useState('');
   const [theme, setTheme] = useState('dark');
   const [expandedAssets, setExpandedAssets] = useState({});
   const [showForex, setShowForex] = useState(false);
-  const [showProfileOverlay, setShowProfileOverlay] = useState(false);
   const [profiles, setProfiles] = useState([]);
   const [newProfileName, setNewProfileName] = useState('');
   const [apiStatus, setApiStatus] = useState({ binance: null, forex: null });
@@ -235,6 +153,8 @@ const App = () => {
   const [activeProfile, setActiveProfile] = useState('Auto');
   const [savePulse, setSavePulse] = useState(false);
   const [showStatusTooltip, setShowStatusTooltip] = useState(false);
+  const [showPriceTerminal, setShowPriceTerminal] = useState(false);
+  const apiPressTimer = useRef(null);
   const [isAnonymous, setIsAnonymous] = useState(false);
   const [editingBalanceFor, setEditingBalanceFor] = useState(null);
   const editRef = useRef(null);
@@ -243,11 +163,6 @@ const App = () => {
   // ── Theme accessor ──
   const T = themes[theme] || themes.dark;
 
-  const categories = {
-    bitcoin: { name: 'Bitcoin', color: 'text-amber-500', barColor: '#f59e0b' },
-    hedging: { name: 'Hedging', color: 'text-red-700', barColor: '#b91c1c' },
-    altcoins: { name: 'Altcoins', color: 'text-violet-500', barColor: '#8b5cf6' },
-  };
 
   const allAssets = {
     btc: { name: 'Bitcoin', symbol: 'BTC', color: 'text-amber-500', bg: 'bg-amber-500/20' },
@@ -269,6 +184,10 @@ const App = () => {
     aave: { name: 'Aave', symbol: 'AAVE', color: 'text-cyan-400', bg: 'bg-cyan-400/20' },
     near: { name: 'NEAR', symbol: 'NEAR', color: 'text-cyan-300', bg: 'bg-cyan-300/20' },
     dash: { name: 'Dash', symbol: 'DASH', color: 'text-blue-300', bg: 'bg-blue-300/20' },
+    xaut: { name: 'Tether Gold', symbol: 'XAUT', color: 'text-yellow-600', bg: 'bg-yellow-600/20' },
+    paxg: { name: 'PAX Gold', symbol: 'PAXG', color: 'text-yellow-500', bg: 'bg-yellow-500/20' },
+    rai: { name: 'Rai Reflex Index', symbol: 'RAI', color: 'text-teal-400', bg: 'bg-teal-400/20' },
+    crv: { name: 'Curve DAO', symbol: 'CRV', color: 'text-rose-400', bg: 'bg-rose-400/20' },
   };
 
   const manualOnlyAssets = ['xmr', 'pivx'];
@@ -282,6 +201,64 @@ const App = () => {
     setTimeout(() => setToast(null), duration);
   };
 
+  // ── PIN utilities ──
+  const hashPin = async (pin) => {
+    const data = new TextEncoder().encode(pin);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+    return Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+  };
+
+  const loadProfileSecurity = async (profileName) => {
+    try {
+      const sec = await invoke('get_profile_security', { profileName });
+      setProfileSecurity(sec);
+      if (sec.has_pin) {
+        setIsLocked(true);
+        setPinInput('');
+        setPinError('');
+      }
+    } catch(_) { setProfileSecurity({ has_pin: false, inactivity_minutes: 0 }); }
+  };
+
+  const handleUnlock = async () => {
+    const h = await hashPin(pinInput);
+    try {
+      const ok = await invoke('verify_profile_pin', { profileName: activeProfile, pinHash: h });
+      if (ok) {
+        setIsLocked(false);
+        setPinInput('');
+        setPinError('');
+        resetInactivityTimer();
+      } else {
+        setPinError('Code incorrect');
+        setPinInput('');
+      }
+    } catch(_) { setPinError('Erreur vérification'); }
+  };
+
+  const resetInactivityTimer = () => {
+    if (inactivityTimerRef.current) clearTimeout(inactivityTimerRef.current);
+    if (profileSecurity.has_pin && profileSecurity.inactivity_minutes > 0 && !isLocked) {
+      inactivityTimerRef.current = setTimeout(() => {
+        setIsLocked(true);
+        setPinInput('');
+      }, profileSecurity.inactivity_minutes * 60 * 1000);
+    }
+  };
+
+  // ── Inactivity detection ──
+  useEffect(() => {
+    if (!profileSecurity.has_pin || profileSecurity.inactivity_minutes === 0 || isLocked) return;
+    const events = ['mousedown', 'keydown', 'scroll', 'touchstart'];
+    const handler = () => resetInactivityTimer();
+    events.forEach(e => document.addEventListener(e, handler, { passive: true }));
+    resetInactivityTimer();
+    return () => {
+      events.forEach(e => document.removeEventListener(e, handler));
+      if (inactivityTimerRef.current) clearTimeout(inactivityTimerRef.current);
+    };
+  }, [profileSecurity, isLocked]);
+
   // Long press copy
   const handleAddressMouseDown = (address) => {
     if (!address) return;
@@ -293,7 +270,16 @@ const App = () => {
   const handleAddressMouseUp = () => { if (longPressTimer) { clearTimeout(longPressTimer); setLongPressTimer(null); } };
 
   // ── Data loading ──
-  const loadWallets = useCallback(async () => { try { setWallets(await invoke('get_wallets')); } catch (e) { console.error(e); } }, []);
+  const loadWallets = async () => {
+    try {
+      const w = await invoke('get_wallets');
+      // Les wallets ont maintenant category_id au lieu de category
+      setWallets(w);
+    } catch (e) {
+      console.error('Erreur chargement wallets:', e);
+      showToast('❌ Erreur chargement wallets', 3000);
+    }
+  };
   const loadPrices = useCallback(async () => {
     try {
       const d = await invoke('get_prices');
@@ -322,7 +308,7 @@ const App = () => {
   }, []);
   const loadProfiles = useCallback(async () => { try { setProfiles(await invoke('list_profiles')); } catch (e) { console.error(e); } }, []);
   const saveSettings = async () => {
-    try { await invoke('save_settings', { settings: { etherscan_api_key: etherscanApiKey, theme } }); setShowSettings(false); } catch (e) { console.error(e); }
+    try { await invoke('save_settings', { settings: { etherscan_api_key: etherscanApiKey, theme } }); setMenuView('main'); showToast('Paramètres sauvegardés ✓'); } catch (e) { console.error(e); }
   };
 
   // ── Profiles ──
@@ -345,7 +331,7 @@ const App = () => {
     } catch (e) { console.error(e); showToast('Erreur sauvegarde profil ✗'); }
   };
   const handleLoadProfile = async (name) => {
-    setShowProfileOverlay(false); setShowSettings(false);
+    setShowMenuDrawer(false);
     if (!await showConfirm(`Charger le profil "${name}" ?\nLe profil actuel sera sauvegardé.`)) return;
     try {
       // Always auto-save current state before loading another profile
@@ -354,21 +340,23 @@ const App = () => {
         try { await invoke('save_profile', { name: saveName, theme }); } catch(e) { console.error('pre-save:', e); }
       }
       const result = await invoke('load_profile', { name });
+      await loadCategories();
       await loadWallets();
       setActiveProfile(name);
       setIsAnonymous(false);
       if (result?.theme) setTheme(result.theme);
       try { await invoke('set_setting', { key: 'last_profile', value: name }); } catch(e) {}
       showToast(`Profil "${name}" chargé ✓`);
+      await loadProfileSecurity(name);
     } catch (e) { console.error(e); showToast('Erreur chargement profil ✗'); }
   };
   const handleDeleteProfile = async (name) => {
-    setShowProfileOverlay(false); setShowSettings(false);
+    setShowMenuDrawer(false);
     if (!await showConfirm(`Supprimer définitivement le profil "${name}" ?`)) return;
     try { await invoke('delete_profile', { name }); await loadProfiles(); showToast(`Profil "${name}" supprimé`); if (activeProfile === name) setActiveProfile('Auto'); } catch (e) { console.error(e); showToast('Erreur suppression ✗'); }
   };
   const handleReset = async () => {
-    setShowSettings(false); setShowProfileOverlay(false);
+    setShowMenuDrawer(false);
     if (!await showConfirm('Créer un nouveau profil vierge ?\nLe profil actuel sera sauvegardé.')) return;
     try {
       if (!isAnonymous && activeProfile !== 'Auto') {
@@ -379,6 +367,7 @@ const App = () => {
       let idx = 1;
       while (profs.filter(p => p !== '__autosave__').includes(newName)) { idx++; newName = `nouveau_profil_${idx}`; }
       await invoke('reset_wallets');
+      await loadCategories();
       await loadWallets();
       await invoke('save_profile', { name: newName, theme });
       await loadProfiles();
@@ -389,13 +378,14 @@ const App = () => {
     } catch (e) { console.error(e); }
   };
   const startAnonymous = async () => {
-    setShowProfileOverlay(false);
+    setShowMenuDrawer(false);
     if (!await showConfirm('Créer un profil anonyme temporaire ?\nIl disparaîtra à la fermeture.')) return;
     try {
       if (!isAnonymous && activeProfile !== 'Auto') {
         await invoke('save_profile', { name: activeProfile, theme });
       }
       await invoke('reset_wallets');
+      await loadCategories();
       await loadWallets();
       setActiveProfile('Anonyme');
       setIsAnonymous(true);
@@ -443,74 +433,216 @@ const App = () => {
     }
   };
 
-  const addNewWallet = async (category, asset, name) => {
-    try { await invoke('add_wallet', { category, asset, name }); await loadWallets(); autoSaveProfile(); } catch (e) { console.error(e); }
+
+  const addNewWallet = async (categoryId, asset, name) => {
+    try {
+      await invoke('add_wallet', { categoryId, asset, name });
+      await loadWallets();
+      autoSaveProfile();
+
+      const category = categories.find(c => c.id === categoryId);
+      const altcoin = altcoinsList.find(a => a.symbol === asset);
+      showToast(`✅ ${altcoin?.name || asset} ajouté à ${category?.name || 'la catégorie'}`, 2000);
+    } catch (e) {
+      console.error(e);
+      showToast('❌ Erreur lors de l\'ajout', 3000);
+    }
   };
   const deleteWallet = async (id) => { try { await invoke('delete_wallet', { id }); await loadWallets(); setEditMode(null); editWalletRef.current = null; autoSaveProfile(); } catch (e) { console.error(e); } };
-  const addAltcoinWallet = (sym) => { const a = altcoinsList.find(x => x.symbol === sym); if (a) { addNewWallet('altcoins', sym, `${a.name} Wallet`); setAltcoinSearch(''); setShowAltcoinDropdown(false); } };
-
+  const handleAddToken = async (categoryId, tokenSymbol, tokenName) => {
+    await addNewWallet(categoryId, tokenSymbol, `${tokenName} Wallet`);
+  };
   // ── Init ──
   useEffect(() => {
+    let cancelled = false;
+
     (async () => {
       await loadSettings();
       await loadAltcoinsList();
+      await loadCategories();
       await loadProfiles();
-      // Try to restore last active profile
-      let restoredProfile = null;
+
+      // Always load default_template at startup
       try {
-        const lastProf = await invoke('get_setting', { key: 'last_profile' });
-        if (lastProf) {
-          const profs = await invoke('list_profiles');
-          if (profs.includes(lastProf)) {
-            const result = await invoke('load_profile', { name: lastProf });
-            restoredProfile = lastProf;
-            setActiveProfile(lastProf);
+        const profs = await invoke('list_profiles');
+        if (profs.includes('default_template')) {
+          const result = await invoke('load_profile', { name: 'default_template' });
+          if (!cancelled) {
+            setActiveProfile('default_template');
             if (result?.theme) setTheme(result.theme);
           }
+        } else {
+          // First launch — save initial state as default_template
+          await invoke('save_profile', { name: 'default_template', theme: 'dark' });
+          if (!cancelled) { setActiveProfile('default_template'); }
         }
-      } catch (e) { console.error('restore profile:', e); }
-      // Fallback to autosave if no last profile
-      if (!restoredProfile) {
-        try {
-          const profs = await invoke('list_profiles');
-          if (profs.includes('__autosave__')) {
-            await invoke('load_profile', { name: '__autosave__' });
-          }
-        } catch (e) { console.error('autosave load:', e); }
+      } catch (e) {
+        console.error('restore profile:', e);
       }
-      await loadWallets();
-      await loadPrices();
+
+      if (!cancelled) {
+        await loadCategories();
+        await loadWallets();
+        await loadPrices();
+        await loadProfileSecurity(activeProfile || 'default_template');
+      }
     })();
-    const iv = setInterval(loadPrices, 5000);
-    const autoSaveIv = setInterval(() => { autoSaveProfile(); }, 120000);
-    return () => { clearInterval(iv); clearInterval(autoSaveIv); };
+
+    return () => { cancelled = true; };
   }, []);
 
+  // ── Intervals for price refresh & autosave ──
   useEffect(() => {
-    const h = (e) => {
+    const priceIv = setInterval(loadPrices, 5000);
+    const saveIv = setInterval(() => { autoSaveProfile(); }, 120000);
+    return () => { clearInterval(priceIv); clearInterval(saveIv); };
+  }, [loadPrices, autoSaveProfile]);
+
+  // ── Click-outside to save wallet edit ──
+  useEffect(() => {
+    const handler = (e) => {
       if (!editMode || !editRef.current) return;
-      // If click is inside the edit form, do nothing
       if (editRef.current.contains(e.target)) return;
-      // If click is on a confirm modal, do nothing
       if (e.target.closest('[data-modal]')) return;
-      const w = editWalletRef.current;
-      if (w) saveWalletEdit(w);
+      const wid = editWalletRef.current;
+      if (wid) saveWalletEdit(wid);
     };
-    document.addEventListener('mousedown', h); return () => document.removeEventListener('mousedown', h);
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
   }, [editMode, editData, wallets]);
 
+  // ── Ctrl+Shift+P → Price Terminal ──
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.ctrlKey && e.shiftKey && e.key === 'P') { e.preventDefault(); setShowPriceTerminal(v => !v); }
+      if (e.key === 'Escape' && showPriceTerminal) setShowPriceTerminal(false);
+      if (e.key === 'Escape' && showWhitepaper) setShowWhitepaper(false);
+    };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, [showPriceTerminal, showWhitepaper]);
+
+  // ── Monitoring: register wallets with backend ──
+  useEffect(() => {
+    if (!monitoringEnabled || wallets.length === 0) return;
+    wallets.forEach(w => {
+      if (w.address && w.address.trim() !== '') {
+        invoke('start_monitoring_wallet', { walletId: w.id, address: w.address, asset: w.asset, walletName: w.name || w.asset.toUpperCase() })
+          .catch(err => console.error('start_monitoring:', err));
+      }
+    });
+  }, [wallets, monitoringEnabled]);
+
+  // ── Monitoring: listen for pending TX events from backend ──
+  const pendingTxsRef = useRef([]);
+  const walletIdsRef = useRef(new Set());
+  useEffect(() => { walletIdsRef.current = new Set(wallets.map(w => w.id)); }, [wallets]);
+  useEffect(() => {
+    if (!monitoringEnabled) return;
+    let unlisten = null;
+
+    const playSound = (type) => {
+      try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain); gain.connect(ctx.destination);
+        if (type === 'new') {
+          osc.frequency.value = 880; gain.gain.value = 0.15;
+          osc.start(); osc.stop(ctx.currentTime + 0.15);
+          setTimeout(() => {
+            const o2 = ctx.createOscillator(); const g2 = ctx.createGain();
+            o2.connect(g2); g2.connect(ctx.destination);
+            o2.frequency.value = 1320; g2.gain.value = 0.12;
+            o2.start(); o2.stop(ctx.currentTime + 0.12);
+          }, 150);
+        } else { // confirmed
+          osc.frequency.value = 523; gain.gain.value = 0.12;
+          osc.start(); osc.stop(ctx.currentTime + 0.1);
+          setTimeout(() => {
+            const o2 = ctx.createOscillator(); const g2 = ctx.createGain();
+            o2.connect(g2); g2.connect(ctx.destination);
+            o2.frequency.value = 784; g2.gain.value = 0.1;
+            o2.start(); o2.stop(ctx.currentTime + 0.1);
+            setTimeout(() => {
+              const o3 = ctx.createOscillator(); const g3 = ctx.createGain();
+              o3.connect(g3); g3.connect(ctx.destination);
+              o3.frequency.value = 1047; g3.gain.value = 0.08;
+              o3.start(); o3.stop(ctx.currentTime + 0.15);
+            }, 100);
+          }, 100);
+        }
+      } catch(_) {}
+    };
+
+    (async () => {
+      const { listen } = await import('@tauri-apps/api/event');
+      unlisten = await listen('pending-tx-update', (event) => {
+        const allTxs = event.payload;
+        const wids = walletIdsRef.current;
+        const txs = allTxs.filter(tx => wids.has(tx.wallet_id));
+        const prev = pendingTxsRef.current;
+        const activeTxs = txs.filter(tx => !tx.completed);
+        setPendingCount(activeTxs.length);
+
+        // Detect new TX (hash not in previous list)
+        const prevHashes = new Set(prev.map(t => t.tx_hash));
+        const newTxs = txs.filter(t => !prevHashes.has(t.tx_hash));
+        if (newTxs.length > 0) {
+          playSound('new');
+          setPendingBarHidden(false);
+          newTxs.forEach(tx => {
+            showToast(`🔔 Nouvelle TX: +${tx.amount.toFixed(6)} ${tx.asset.toUpperCase()}`, 5000);
+          });
+        }
+
+        // Detect newly confirmed TX
+        const justConfirmed = txs.filter(t => t.completed && prev.find(p => p.tx_hash === t.tx_hash && !p.completed));
+        if (justConfirmed.length > 0) {
+          playSound('confirmed');
+          justConfirmed.forEach(tx => {
+            showToast(`✅ TX confirmée: +${tx.amount.toFixed(6)} ${tx.asset.toUpperCase()}`, 5000);
+          });
+        }
+
+        pendingTxsRef.current = txs;
+      });
+
+      // Initial load
+      try {
+        const allTxs = await invoke('get_pending_transactions');
+        const txs = allTxs.filter(t => walletIdsRef.current.has(t.wallet_id));
+        pendingTxsRef.current = txs;
+        setPendingCount(txs.filter(t => !t.completed).length);
+      } catch(_) {}
+    })();
+
+    // Polling backup every 30s
+    const pollInterval = setInterval(async () => {
+      try {
+        const allTxs = await invoke('get_pending_transactions');
+        const txs = allTxs.filter(t => walletIdsRef.current.has(t.wallet_id));
+        setPendingCount(txs.filter(t => !t.completed).length);
+        pendingTxsRef.current = txs;
+      } catch(_) {}
+    }, 30000);
+
+    return () => {
+      if (unlisten) unlisten();
+      clearInterval(pollInterval);
+    };
+  }, [monitoringEnabled]);
+
   // ── Calcs ──
-  const getWalletsByCategory = (c) => wallets.filter(w => w.category === c);
+  const getWalletsByCategory = (catId) => wallets.filter(w => w.category_id === catId);
   const getAssetTotalBalance = (a) => wallets.filter(w => w.asset === a).reduce((s, w) => s + (w.balance || 0), 0);
-  const getCategoryValueEur = (c) => getWalletsByCategory(c).reduce((s, w) => s + (w.balance || 0) * (prices[w.asset]?.eur || 0), 0);
-  const getTotalEur = () => Object.keys(categories).reduce((s, c) => s + getCategoryValueEur(c), 0);
-  const getTotalUsd = () => { const e = getTotalEur(); return prices.btc?.eur > 0 && prices.btc?.usd > 0 ? e * (prices.btc.usd / prices.btc.eur) : 0; };
+  const getCategoryValueEur = (catId) => getWalletsByCategory(catId).reduce((s, w) => s + (w.balance || 0) * (prices[w.asset]?.eur || 0), 0);
+  const getTotalEur = () => categories.reduce((s, c) => s + getCategoryValueEur(c.id), 0);
+  const getTotalUsd = () => prices.eurusd > 0 ? getTotalEur() * prices.eurusd : 0;
   const getTotalBtc = () => prices.btc?.eur > 0 ? getTotalEur() / prices.btc.eur : 0;
   const getTotalGoldOz = () => prices.gold_usd_per_oz > 0 ? getTotalUsd() / prices.gold_usd_per_oz : 0;
   const getTotal = (key) => getTotalUsd() * (prices[key] || 0);
-  const getCategoryPercentage = (c) => { const t = getTotalEur(); return t > 0 ? (getCategoryValueEur(c) / t) * 100 : 0; };
-  const getUniqueAssetsInCategory = (c) => [...new Set(getWalletsByCategory(c).map(w => w.asset))];
-  const filteredAltcoins = altcoinsList.filter(a => a.name.toLowerCase().includes(altcoinSearch.toLowerCase()) || a.symbol.toLowerCase().includes(altcoinSearch.toLowerCase()));
+  const getCategoryPercentage = (catId) => { const t = getTotalEur(); return t > 0 ? (getCategoryValueEur(catId) / t) * 100 : 0; };
 
   const startEdit = (wallet) => {
     setEditMode(`edit-${wallet.id}`);
@@ -524,18 +656,20 @@ const App = () => {
   const MiniPriceCard = ({ asset }) => {
     const p = prices[asset] || {}, cfg = allAssets[asset];
     return (
-      <div className={`${T.cardBg} border ${T.cardBorder} rounded-lg p-3`}>
-        <span className={`text-xs font-bold ${cfg.color}`}>{cfg.symbol}</span>
-        <div className="text-sm font-semibold tabular-nums">{p.usd > 0 ? `${formatNum(p.usd)} ₮` : '–'}</div>
-        <div className={`text-xs ${T.textMuted} tabular-nums`}>{p.eur > 0 ? `${formatNum(p.eur)} €` : '–'}</div>
-        {p.btc > 0 && <div className={`text-xs ${T.textFaint} tabular-nums`}>{formatNum(p.btc, 8)} ₿</div>}
+      <div className={`${T.cardBg} border ${T.cardBorder} rounded-lg px-2 pt-1.5 pb-1`}>
+        <div className="flex items-baseline gap-1.5">
+          <span className={`text-xs font-bold ${cfg.color}`}>{cfg.symbol}</span>
+          <span className="text-xs font-semibold tabular-nums">{p.usd > 0 ? `${formatNum(p.usd)} ₮` : '–'}</span>
+        </div>
+        <div className={`text-[10px] ${T.textMuted} tabular-nums`}>{p.eur > 0 ? `${formatNum(p.eur)} €` : '–'}</div>
+        {p.btc > 0 && <div className={`text-[10px] ${T.textFaint} tabular-nums`}>{formatNum(p.btc, 8)} ₿</div>}
       </div>
     );
   };
 
   // Trash icon SVG
   const TrashIcon = () => (
-    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+    <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
       <polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
       <line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/>
     </svg>
@@ -551,7 +685,7 @@ const App = () => {
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center" data-modal style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
         <div className={`${T.cardBg} border ${T.cardBorder2} rounded-xl p-6 max-w-sm w-full mx-4 shadow-2xl`}>
-          <p className={`text-sm mb-6 ${T.text}`}>{confirmModal.message}</p>
+          <p className={`text-sm mb-6 ${T.textMain} whitespace-pre-line`}>{confirmModal.message}</p>
           <div className="flex gap-3 justify-end">
             <button onClick={confirmModal.onCancel}
               className={`px-4 py-2 rounded-lg text-sm ${T.inputBg} border ${T.inputBorder} ${T.textMuted} hover:opacity-80 transition-opacity`}>
@@ -593,7 +727,7 @@ const App = () => {
               <div className={`font-semibold ${cfg.color}`}>{maskBalance(totalBal, 8)} {cfg.symbol}</div>
               <div className={`text-xs ${T.textMuted}`}>{maskBalance(totalVal)} €</div>
             </div>
-            {walletCount > 0 && <div className={`${T.textMuted} transition-transform p-2 -m-2 ${isExpanded ? 'rotate-180' : ''}`}><ChevronIcon size={20} /></div>}
+            {walletCount > 0 && <div className={`${T.textMuted} transition-transform p-2 -m-2 rounded border border-transparent hover:border-current/20 hover:bg-amber-500/10 hover:text-amber-500 ${isExpanded ? 'rotate-180' : ''}`}><ChevronIcon size={20} /></div>}
           </div>
         </div>
       </div>
@@ -630,7 +764,7 @@ const App = () => {
         ) : (
           <div onClick={handleUnlockBalance}
             className={`relative w-full px-3 py-2 rounded text-sm border ${T.inputBorder} cursor-pointer overflow-hidden`}
-            style={{ background: `repeating-linear-gradient(-45deg, transparent, transparent 4px, ${theme === 'dark' || theme === 'noctali' ? 'rgba(255,255,255,0.03)' : theme === 'sepia' ? 'rgba(139,115,85,0.06)' : 'rgba(0,0,0,0.04)'} 4px, ${theme === 'dark' || theme === 'noctali' ? 'rgba(255,255,255,0.03)' : theme === 'sepia' ? 'rgba(139,115,85,0.06)' : 'rgba(0,0,0,0.04)'} 8px)` }}>
+            style={{ background: `repeating-linear-gradient(-45deg, transparent, transparent 4px, ${theme === 'dark' || theme === 'noctali' || theme === 'lunarpunk' ? 'rgba(255,255,255,0.03)' : theme === 'sepia' ? 'rgba(139,115,85,0.06)' : 'rgba(0,0,0,0.04)'} 4px, ${theme === 'dark' || theme === 'noctali' || theme === 'lunarpunk' ? 'rgba(255,255,255,0.03)' : theme === 'sepia' ? 'rgba(139,115,85,0.06)' : 'rgba(0,0,0,0.04)'} 8px)` }}>
             <div className="flex items-center justify-between">
               <span className={`${T.textFaint} opacity-60`}>{editData.balance || '–'} {cfg.symbol}</span>
               <span className={`text-xs ${T.textMuted} font-medium`}>modifier</span>
@@ -644,6 +778,110 @@ const App = () => {
         </div>
       </div>
     );
+  };
+
+  // fonction loadCategories
+  const loadCategories = async () => {
+    try {
+      const cats = await invoke('get_categories');
+      setCategories(cats);
+    } catch (e) {
+      console.error('Erreur chargement catégories:', e);
+      showToast('❌ Erreur chargement catégories', 3000);
+    }
+  };
+
+  // ── Category inline edit ──
+  const startEditCatName = (cat) => { setEditingCatId(cat.id); setCatNameDraft(cat.name); };
+  const saveCatName = async (catId) => {
+    const trimmed = catNameDraft.trim();
+    const cat = categories.find(c => c.id === catId);
+    if (trimmed && cat && trimmed !== cat.name) {
+      try {
+        await invoke('update_category', { id: catId, name: trimmed, color: cat.color, barColor: cat.bar_color });
+        await loadCategories();
+        autoSaveProfile();
+      } catch (e) { console.error(e); showToast('❌ Erreur renommage', 2000); }
+    }
+    setEditingCatId(null);
+  };
+
+  const addCategory = async () => {
+    const palette = [
+      { color: 'text-emerald-500', bar: '#10b981' },
+      { color: 'text-cyan-500', bar: '#06b6d4' },
+      { color: 'text-pink-500', bar: '#ec4899' },
+      { color: 'text-orange-500', bar: '#f97316' },
+      { color: 'text-indigo-500', bar: '#6366f1' },
+      { color: 'text-teal-500', bar: '#14b8a6' },
+      { color: 'text-rose-500', bar: '#f43f5e' },
+      { color: 'text-sky-500', bar: '#0ea5e9' },
+    ];
+    const pick = palette[categories.length % palette.length];
+    try {
+      await invoke('add_category', { name: 'Nouvelle catégorie', color: pick.color, barColor: pick.bar });
+      const cats = await invoke('get_categories');
+      setCategories(cats);
+      const newest = cats[cats.length - 1];
+      if (newest) { setEditingCatId(newest.id); setCatNameDraft(newest.name); }
+      autoSaveProfile();
+    } catch (e) { console.error(e); showToast('❌ Erreur création', 2000); }
+  };
+
+  const deleteCategory = async (catId) => {
+    if (categories.length <= 1) { showToast('⚠️ Impossible de supprimer la dernière catégorie', 2000); return; }
+    const cat = categories.find(c => c.id === catId);
+    const count = wallets.filter(w => w.category_id === catId).length;
+    const msg = count > 0 ? `Supprimer "${cat?.name}" et ses ${count} wallet(s) ?` : `Supprimer la catégorie "${cat?.name}" ?`;
+    if (!await showConfirm(msg)) return;
+    try {
+      await invoke('delete_category', { id: catId });
+      await loadCategories();
+      await loadWallets();
+      autoSaveProfile();
+    } catch (e) { console.error(e); showToast('❌ Erreur suppression', 2000); }
+  };
+
+  // ── Category reorder by arrows ──
+  const moveCat = async (catId, direction) => {
+    // direction: -1 = up one, +1 = down one, -Infinity = top, +Infinity = bottom
+    const sorted = [...categories].sort((a, b) => a.display_order - b.display_order);
+    const ids = sorted.map(c => c.id);
+    const idx = ids.indexOf(catId);
+    if (idx === -1) return;
+
+    let newIdx;
+    if (direction === -Infinity) newIdx = 0;
+    else if (direction === Infinity) newIdx = ids.length - 1;
+    else newIdx = idx + direction;
+
+    if (newIdx < 0 || newIdx >= ids.length || newIdx === idx) return;
+
+    ids.splice(idx, 1);
+    ids.splice(newIdx, 0, catId);
+
+    // Optimistic UI
+    const reordered = ids.map((id, i) => ({ ...categories.find(c => c.id === id), display_order: i }));
+    setCategories(reordered);
+    try { await invoke('reorder_categories', { categoryIds: ids }); } catch (e) { console.error(e); await loadCategories(); }
+  };
+
+  // Double-click timers
+  const clickTimers = useRef({});
+  const handleArrowClick = (catId, direction) => {
+    const key = `${catId}-${direction}`;
+    if (clickTimers.current[key]) {
+      // Double click → move to top/bottom
+      clearTimeout(clickTimers.current[key]);
+      clickTimers.current[key] = null;
+      moveCat(catId, direction < 0 ? -Infinity : Infinity);
+    } else {
+      // Single click — wait to see if double
+      clickTimers.current[key] = setTimeout(() => {
+        clickTimers.current[key] = null;
+        moveCat(catId, direction);
+      }, 250);
+    }
   };
 
   // ── WalletRow: display only (no edit form = no focus issues) ──
@@ -660,7 +898,7 @@ const App = () => {
     };
 
     return (
-      <div className={`${T.rowBg} border ${T.rowBorder} rounded-lg p-3 flex items-center justify-between group`}>
+      <div className={`${T.rowBg} border ${T.rowBorder} rounded-lg px-3 py-2 flex items-center justify-between group`}>
         <div className="flex items-center gap-3 cursor-pointer flex-1 min-w-0" onClick={() => startEdit(wallet)}>
           <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${cfg.bg} ${cfg.color} flex-shrink-0`}>{cfg.symbol}</span>
           <div className="min-w-0">
@@ -673,26 +911,26 @@ const App = () => {
             </div>
           </div>
         </div>
-        <div className="flex items-center gap-2 flex-shrink-0">
+        <div className="flex items-center gap-1.5 flex-shrink-0">
           <div className="text-right cursor-pointer" onClick={() => startEdit(wallet)}>
             <div className="font-medium tabular-nums">{wallet.balance != null ? maskBalance(wallet.balance, 8) : '–'}<span className={`${T.textMuted} text-sm ml-1`}>{cfg.symbol}</span></div>
             <div className={`text-xs ${T.textFaint} tabular-nums`}>{maskBalance(valEur)} €</div>
           </div>
-          <div className="flex flex-col items-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
+          <div className="flex items-center gap-0 opacity-0 group-hover:opacity-100 transition-all">
             {wallet.address && (
               <>
                 <button onClick={handleQuickCopy} title="Copier l'adresse"
-                  className={`p-2 rounded transition-all duration-300 ${isCopied ? 'text-green-400 scale-110' : `${T.textFaint} hover:text-amber-500`}`}>
-                  {isCopied ? <SaveIcon size={14} check /> : <CopyIcon size={14} />}
+                  className={`p-1 rounded transition-all duration-300 ${isCopied ? 'text-green-400 scale-110' : `${T.textFaint} hover:text-amber-500`}`}>
+                  {isCopied ? <SaveIcon size={12} check /> : <CopyIcon size={12} />}
                 </button>
                 <button onClick={(e) => { e.stopPropagation(); setQrOverlay({ address: wallet.address, name: wallet.name }); }} title="QR Code"
-                  className={`p-2 rounded ${T.textFaint} hover:text-amber-500 transition-colors`}>
-                  <QRCodeIcon size={14} />
+                  className={`p-1 rounded ${T.textFaint} hover:text-amber-500 transition-colors`}>
+                  <QRCodeIcon size={12} />
                 </button>
               </>
             )}
             <button onClick={async (e) => { e.stopPropagation(); if (await showConfirm(`Supprimer "${wallet.name}" ?`)) deleteWallet(wallet.id); }}
-              className={`${T.textFaint} hover:text-red-400 transition-all p-2`}>
+              className={`${T.textFaint} hover:text-red-400 transition-all p-1`}>
               <TrashIcon />
             </button>
           </div>
@@ -708,7 +946,203 @@ const App = () => {
     <div className={`min-h-screen ${T.bg} ${T.textMain}`}>
       {/* Noctali starfield + moon + images */}
       {theme === 'noctali' && <><NoctaliStarfield /><NoctaliMoon /><NoctaliImages /></>}
+      {theme === 'lunarpunk' && <><LunarPunkDust /><LunarPunkDunes /><LunarPunkMoon /></>}
       <ConfirmModal />
+
+      {/* ── Bloomberg-style Price Terminal (Ctrl+Shift+P / long-press API) ── */}
+      {showPriceTerminal && (() => {
+        const f = (n, d = 2) => n > 0 ? n.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d }) : '—';
+        const f8 = (n) => f(n, 8);
+        const p = prices;
+
+        // Classify assets by source
+        const binanceDirect = [ // Assets with direct EUR pair on Binance
+          { sym: 'BTC', d: p.btc, pairs: 'BTCUSDT BTCEUR', src: 'Binance' },
+          { sym: 'ETH', d: p.eth, pairs: 'ETHUSDT ETHEUR ETHBTC', src: 'Binance' },
+          { sym: 'BCH', d: p.bch, pairs: 'BCHUSDT BCHEUR BCHBTC', src: 'Binance' },
+          { sym: 'LTC', d: p.ltc, pairs: 'LTCUSDT LTCEUR LTCBTC', src: 'Binance' },
+          { sym: 'ETC', d: p.etc, pairs: 'ETCUSDT ETCEUR ETCBTC', src: 'Binance' },
+          { sym: 'LINK', d: p.link, pairs: 'LINKUSDT LINKEUR LINKBTC', src: 'Binance' },
+          { sym: 'DOT', d: p.dot, pairs: 'DOTUSDT DOTEUR DOTBTC', src: 'Binance' },
+          { sym: 'ADA', d: p.ada, pairs: 'ADAUSDT ADAEUR ADABTC', src: 'Binance' },
+          { sym: 'SOL', d: p.sol, pairs: 'SOLUSDT SOLEUR SOLBTC', src: 'Binance' },
+          { sym: 'AVAX', d: p.avax, pairs: 'AVAXUSDT AVAXEUR AVAXBTC', src: 'Binance' },
+          { sym: 'DOGE', d: p.doge, pairs: 'DOGEUSDT DOGEEUR DOGEBTC', src: 'Binance' },
+          { sym: 'XRP', d: p.xrp, pairs: 'XRPUSDT XRPEUR XRPBTC', src: 'Binance' },
+          { sym: 'UNI', d: p.uni, pairs: 'UNIUSDT UNIEUR UNIBTC', src: 'Binance' },
+          { sym: 'AAVE', d: p.aave, pairs: 'AAVEUSDT AAVEEUR AAVEBTC', src: 'Binance' },
+          { sym: 'NEAR', d: p.near, pairs: 'NEARUSDT NEAREUR NEARBTC', src: 'Binance' },
+          { sym: 'QTUM', d: p.qtum, pairs: 'QTUMUSDT QTUMEUR QTUMBTC', src: 'Binance' },
+        ];
+        const derived = [ // Assets with EUR derived from USD or BTC
+          { sym: 'DASH', d: p.dash, pairs: 'DASHUSDT DASHBTC', src: 'Binance', deriv: 'EUR = USD × (BTC.eur / BTC.usd)' },
+          { sym: 'PIVX', d: p.pivx, pairs: 'PIVXBTC PIVXETH', src: 'Binance', deriv: 'USD = BTC × BTC.usd · EUR = BTC × BTC.eur' },
+          { sym: 'CRV', d: p.crv, pairs: 'CRVUSDT CRVBTC', src: 'Binance', deriv: 'EUR = USD × (BTC.eur / BTC.usd)' },
+          { sym: 'XMR', d: p.xmr, pairs: 'tXMRUSD tXMRBTC', src: 'Bitfinex', deriv: 'EUR = USD × (BTC.eur / BTC.usd)' },
+          { sym: 'XAUT', d: p.xaut, pairs: 'tXAUTUSD tXAUTBTC', src: 'Bitfinex', deriv: 'EUR = USD × (BTC.eur / BTC.usd)' },
+          { sym: 'RAI', d: p.rai, pairs: 'rai→usd,btc', src: 'CoinGecko', deriv: 'EUR = USD × (BTC.eur / BTC.usd)' },
+          { sym: 'PAXG', d: p.paxg, pairs: 'PAXGUSDT', src: 'Binance', deriv: 'EUR = USD × (BTC.eur / BTC.usd)' },
+        ];
+        const eurPerUsd = p.btc?.eur > 0 && p.btc?.usd > 0 ? (p.btc.eur / p.btc.usd) : 0;
+
+        const Row = ({ cells, header }) => (
+          <tr className={header ? 'text-amber-500/80' : 'text-zinc-300 hover:bg-zinc-800/50'}>
+            {cells.map((c, i) => header
+              ? <th key={i} className="text-left px-2 py-0.5 font-medium border-b border-zinc-700/50">{c}</th>
+              : <td key={i} className="px-2 py-0.5 whitespace-nowrap">{c}</td>
+            )}
+          </tr>
+        );
+
+        return (
+          <div className="fixed inset-0 z-[999] bg-black/[0.91] overflow-auto" onClick={(e) => { if (e.target === e.currentTarget) setShowPriceTerminal(false); }}>
+            <div className="max-w-6xl mx-auto p-6 font-mono text-xs text-zinc-300">
+              {/* Header */}
+              <div className="flex justify-between items-center mb-6 border-b border-amber-500/30 pb-3">
+                <div>
+                  <span className="text-amber-500 text-lg font-bold">JANUS</span>
+                  <span className="text-zinc-500 text-lg ml-2">PRICE TERMINAL</span>
+                  <span className="text-zinc-600 ml-4 text-[10px]">{lastPriceUpdate ? lastPriceUpdate.toLocaleTimeString() : '—'}</span>
+                </div>
+                <div className="flex items-center gap-4">
+                  <span className="text-zinc-600">[Ctrl+Shift+P] · [Escape]</span>
+                  <button onClick={() => setShowPriceTerminal(false)} className="text-zinc-500 hover:text-amber-500 text-lg">✕</button>
+                </div>
+              </div>
+
+              {/* ── SECTION 1: Direct Feeds ── */}
+              <div className="mb-6">
+                <div className="text-amber-500/60 text-[10px] uppercase tracking-widest mb-2">▸ Direct Price Feeds</div>
+                <table className="w-full">
+                  <tbody>
+                    <Row header cells={['ASSET', 'SOURCE', 'PAIRS', 'USD', 'EUR', 'BTC', 'ETH']} />
+                    {binanceDirect.map(a => (
+                      <Row key={a.sym} cells={[
+                        <span className="text-amber-400 font-bold">{a.sym}</span>, 
+                        <span className="text-green-500/70">{a.src}</span>,
+                        <span className="text-zinc-600">{a.pairs}</span>,
+                        f(a.d?.usd), f(a.d?.eur), f8(a.d?.btc), f8(a.d?.eth)
+                      ]} />
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* ── SECTION 2: Derived Feeds ── */}
+              <div className="mb-6">
+                <div className="text-amber-500/60 text-[10px] uppercase tracking-widest mb-2">▸ Derived Feeds (EUR calculated)</div>
+                <div className="text-zinc-600 text-[10px] mb-2 ml-2">
+                  eur_per_usd = BTC.eur / BTC.usd = {f(p.btc?.eur)} / {f(p.btc?.usd)} = <span className="text-zinc-400">{f(eurPerUsd, 6)}</span>
+                </div>
+                <table className="w-full">
+                  <tbody>
+                    <Row header cells={['ASSET', 'SOURCE', 'PAIRS', 'USD', 'EUR ⚡', 'BTC', 'DERIVATION']} />
+                    {derived.map(a => (
+                      <Row key={a.sym} cells={[
+                        <span className="text-amber-400 font-bold">{a.sym}</span>,
+                        <span className={a.src === 'Binance' ? 'text-green-500/70' : a.src === 'Bitfinex' ? 'text-blue-400/70' : 'text-purple-400/70'}>{a.src}</span>,
+                        <span className="text-zinc-600">{a.pairs}</span>,
+                        f(a.d?.usd), 
+                        <span className="text-yellow-500/80">{f(a.d?.eur)}</span>,
+                        f8(a.d?.btc),
+                        <span className="text-zinc-500 text-[10px]">{a.deriv}</span>
+                      ]} />
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* ── SECTION 3: Forex & Indices ── */}
+              <div className="mb-6">
+                <div className="text-amber-500/60 text-[10px] uppercase tracking-widest mb-2">▸ Forex, Commodities & Indices</div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <table className="w-full">
+                      <tbody>
+                        <Row header cells={['PAIR', 'RATE', 'SOURCE']} />
+                        <Row cells={[<span className="text-blue-400 font-bold">EUR/USD</span>, <span className="text-white font-bold">{f(p.eurusd, 4)}</span>, <span className="text-zinc-600">BTC.usd / BTC.eur</span>]} />
+                        {[
+                          ['USD/JPY', p.forex_jpy_per_usd, 0], ['USD/CNY', p.forex_cny_per_usd, 4], ['USD/CAD', p.forex_cad_per_usd, 4],
+                          ['USD/CHF', p.forex_chf_per_usd, 4], ['USD/GBP', p.forex_gbp_per_usd, 4], ['USD/SEK', p.forex_sek_per_usd, 4],
+                          ['USD/NOK', p.forex_nok_per_usd, 4], ['USD/HKD', p.forex_hkd_per_usd, 4], ['USD/KRW', p.forex_krw_per_usd, 0],
+                          ['USD/AUD', p.forex_aud_per_usd, 4], ['USD/NZD', p.forex_nzd_per_usd, 4], ['USD/SGD', p.forex_sgd_per_usd, 4],
+                          ['USD/BRL', p.forex_brl_per_usd, 4], ['USD/ZAR', p.forex_zar_per_usd, 4], ['USD/RUB', p.forex_rub_per_usd, 2],
+                        ].map(([pair, rate, dec]) => (
+                          <Row key={pair} cells={[pair, f(rate, dec), <span className="text-zinc-600">{pair === 'USD/RUB' ? 'er-api.com' : 'Frankfurter'}</span>]} />
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div>
+                    <table className="w-full">
+                      <tbody>
+                        <Row header cells={['INDEX', 'VALUE', 'SOURCE']} />
+                        <Row cells={[<span className="text-yellow-600 font-bold">GOLD/oz</span>, <span className="text-yellow-500">{f(p.gold_usd_per_oz)} $</span>, <span className="text-zinc-600">PAXGUSDT Binance</span>]} />
+                        <Row cells={['BRENT', `${f(p.brent_usd)} $`, <span className="text-zinc-600">Yahoo Finance</span>]} />
+                        <Row cells={[
+                          <span className={`font-bold ${p.vix >= 20 ? 'text-red-400' : 'text-green-400'}`}>VIX</span>,
+                          <span className={p.vix >= 20 ? 'text-red-400' : 'text-green-400'}>{f(p.vix)}</span>,
+                          <span className="text-zinc-600">Yahoo Finance</span>
+                        ]} />
+                        <Row cells={[<span className="font-bold text-green-300">DXY</span>, f(p.dxy), <span className="text-zinc-600">ICE formula (synth)</span>]} />
+                      </tbody>
+                    </table>
+                    <div className="mt-3 p-2 bg-zinc-900/80 rounded border border-zinc-800 text-[10px] text-zinc-600">
+                      <div className="text-zinc-500 mb-1">DXY = 50.143 × EUR/USD^(-0.576) × USD/JPY^(0.136)</div>
+                      <div className="text-zinc-500">× GBP/USD^(-0.119) × USD/CAD^(0.091) × USD/SEK^(0.042) × USD/CHF^(0.036)</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* ── SECTION 4: Portfolio Totals Decomposition ── */}
+              <div className="mb-6">
+                <div className="text-amber-500/60 text-[10px] uppercase tracking-widest mb-2">▸ Portfolio Calculation Chain</div>
+                <div className="p-3 bg-zinc-900/80 rounded border border-zinc-800 space-y-2">
+                  {[...categories].sort((a, b) => a.display_order - b.display_order).map(cat => {
+                    const val = getCategoryValueEur(cat.id);
+                    const pct = getCategoryPercentage(cat.id);
+                    const ws = getWalletsByCategory(cat.id);
+                    const assetBreakdown = [...new Set(ws.map(w => w.asset))].map(a => {
+                      const bal = ws.filter(w => w.asset === a).reduce((s, w) => s + (w.balance || 0), 0);
+                      const eur = prices[a]?.eur || 0;
+                      return { a, bal, eur, val: bal * eur };
+                    }).filter(x => x.bal > 0);
+                    return (
+                      <div key={cat.id}>
+                        <div className="flex items-center gap-2">
+                          <span className={`${cat.color} font-bold`}>{cat.name}</span>
+                          <span className="text-zinc-600">= Σ(balance × price.eur) =</span>
+                          <span className="text-white font-bold">{f(val)} €</span>
+                          <span className="text-zinc-600">({f(pct, 1)}%)</span>
+                        </div>
+                        {assetBreakdown.length > 0 && (
+                          <div className="ml-4 text-zinc-500">
+                            {assetBreakdown.map(x => (
+                              <span key={x.a} className="mr-3">{x.a.toUpperCase()}: {f(x.bal, 6)} × {f(x.eur)} = <span className="text-zinc-400">{f(x.val)} €</span></span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                  <div className="border-t border-zinc-700/50 pt-2 mt-2 space-y-1">
+                    <div><span className="text-zinc-500">TOTAL EUR</span> <span className="text-white font-bold ml-2">{f(getTotalEur())} €</span> <span className="text-zinc-600 ml-2">= Σ categories</span></div>
+                    <div><span className="text-zinc-500">TOTAL USD</span> <span className="text-white font-bold ml-2">{f(getTotalUsd())} $</span> <span className="text-zinc-600 ml-2">= totalEur × eurusd ({f(p.eurusd, 4)})</span></div>
+                    <div><span className="text-zinc-500">TOTAL BTC</span> <span className="text-amber-500 font-bold ml-2">{f(getTotalBtc(), 8)} ₿</span> <span className="text-zinc-600 ml-2">= totalEur / btc.eur ({f(p.btc?.eur)})</span></div>
+                    <div><span className="text-zinc-500">TOTAL GOLD</span> <span className="text-yellow-500 font-bold ml-2">{f(getTotalGoldOz(), 4)} oz</span> <span className="text-zinc-600 ml-2">= totalUsd / gold_oz ({f(p.gold_usd_per_oz)})</span></div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Footer */}
+              <div className="text-zinc-700 text-[10px] text-center border-t border-zinc-800 pt-3">
+                Binance REST API · Bitfinex v2 · CoinGecko free · Frankfurter (ECB) · er-api.com · Yahoo Finance
+              </div>
+            </div>
+          </div>
+        );
+      })()}
       {/* QR Code Overlay */}
       {qrOverlay && (
         <div className="fixed inset-0 bg-black/70 z-[100] flex items-center justify-center" onClick={() => setQrOverlay(null)}>
@@ -734,7 +1168,7 @@ const App = () => {
         </div>
       )}
       <header className={`border-b ${T.headerBorder} sticky top-0 ${T.headerBg} backdrop-blur z-10`}>
-        <div className="max-w-4xl mx-auto px-4 py-4">
+        <div className="max-w-4xl mx-auto px-4 py-3">
           {/* Top bar */}
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-3">
@@ -743,13 +1177,15 @@ const App = () => {
                 <span className={refreshing ? 'animate-spin' : ''}>↻</span>
               </button>
               <div>
-                <h1 className="font-semibold text-lg">JANUS Monitor</h1>
-                <p className={`text-xs ${T.textMuted}`}>Réserve sécurisée · <span className={T.textFaint}>v1.0</span> · <span className={theme === 'noctali' ? 'text-[#F4D995]/70' : 'text-amber-500/70'}>{activeProfile}</span></p>
+                <h1 className="font-bold text-xl select-none cursor-default" onClick={(e) => { if (e.detail === 3) setShowWhitepaper(true); }}>JANUS Monitor</h1>
+                <p className={`text-xs ${T.textMuted}`}>Réserve sécurisée · <span className={T.textFaint}>v2.0</span> · <span className={T.accentMuted}>{activeProfile}</span></p>
               </div>
             </div>
             <div className="flex items-center gap-2">
               <div className="relative"
-                onMouseEnter={() => setShowStatusTooltip(true)} onMouseLeave={() => setShowStatusTooltip(false)}>
+                onMouseEnter={() => setShowStatusTooltip(true)} onMouseLeave={() => { setShowStatusTooltip(false); if (apiPressTimer.current) { clearTimeout(apiPressTimer.current); apiPressTimer.current = null; } }}
+                onPointerDown={() => { apiPressTimer.current = setTimeout(() => { apiPressTimer.current = null; setShowPriceTerminal(true); }, 2000); }}
+                onPointerUp={() => { if (apiPressTimer.current) { clearTimeout(apiPressTimer.current); apiPressTimer.current = null; } }}>
                 <div className="flex items-center gap-1 mr-1 cursor-help">
                   <div className={`w-1.5 h-1.5 rounded-full ${apiStatus.binance ? 'bg-green-500' : apiStatus.binance === false ? 'bg-red-500' : 'bg-zinc-600'}`} />
                   <div className={`w-1.5 h-1.5 rounded-full ${apiStatus.forex ? 'bg-green-500' : apiStatus.forex === false ? 'bg-red-500' : 'bg-zinc-600'}`} />
@@ -769,40 +1205,50 @@ const App = () => {
               </div>
               <button onClick={() => { autoSaveProfile(); }} title="Sauvegarder"
                 className={`p-2 rounded-lg ${T.inputBg} transition-all duration-300 ${savePulse ? 'text-green-400 scale-110' : `${T.textMuted} hover:text-amber-500`}`}>
-                <SaveIcon size={15} check={savePulse} />
+                <SaveIcon size={18} check={savePulse} />
               </button>
               <div className="relative">
-                <button onClick={() => { setShowProfileOverlay(!showProfileOverlay); setShowSettings(false); loadProfiles(); }}
-                  className={`p-2 rounded-lg ${T.inputBg} ${T.textMuted} text-sm`}>☰</button>
+                <button onClick={() => { setShowMenuDrawer(!showMenuDrawer); setMenuView('main'); loadProfiles(); }}
+                  className={`p-2 rounded-lg ${T.inputBg} ${T.textMuted} hover:text-amber-500 transition-colors`}>
+                  <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
+                  </svg>
+                </button>
+                {pendingCount > 0 && <span className="absolute -top-0.5 -right-0.5 bg-red-500 text-white text-[9px] rounded-full w-4 h-4 flex items-center justify-center font-bold">{pendingCount}</span>}
               </div>
-              <button onClick={() => { setShowSettings(!showSettings); setShowProfileOverlay(false); }} className={`p-2 rounded-lg ${T.inputBg} ${T.textMuted}`}>⚙</button>
-              <button onClick={() => setHideBalances(!hideBalances)}
-                className={`p-2 rounded-lg transition-colors ${hideBalances ? 'bg-amber-500/20 text-amber-500' : `${T.inputBg} ${T.textMuted}`}`}>
-                {hideBalances ? <EyeOffIcon /> : <EyeIcon />}
+              <button
+              onClick={() => setHideBalances(!hideBalances)}
+              className={`p-2 rounded-lg transition-colors ${hideBalances ? 'bg-amber-500/20 text-amber-500' : `${T.inputBg} ${T.textMuted}`}`}
+              >
+              {hideBalances ? <EyeOffIcon /> : <EyeIcon />}
               </button>
+
               <div className={`text-right text-xs ${T.textFaint}`}>
-                <div>Binance</div>
-                {lastPriceUpdate && <div>{lastPriceUpdate.toLocaleTimeString('fr-FR')}</div>}
+              <div>Binance</div>
+              {lastPriceUpdate && <div>{lastPriceUpdate.toLocaleTimeString('fr-FR')}</div>}
               </div>
-            </div>
-          </div>
+              </div>
+              </div>
 
           {/* Totaux */}
-          <div className="grid gap-3 mb-3" style={{ gridTemplateColumns: '1.6fr 1fr 1fr auto' }}>
-            <div className={`${T.cardBg} border ${theme === 'noctali' ? 'border-[#F4D995]/30' : 'border-amber-500/30'} rounded-lg p-3`}
-              style={theme === 'noctali' ? { boxShadow: '0 0 15px rgba(244,217,149,0.06)' } : {}}>
-              <div className={`text-xs ${theme === 'noctali' ? 'text-[#F4D995]/70' : 'text-amber-500/70'}`}>Total BTC</div>
-              <div className={`text-2xl font-bold tabular-nums ${theme === 'noctali' ? 'text-[#F4D995]' : 'text-amber-500'}`}>{maskBalance(getTotalBtc(), 8)}</div>
+          <div className="grid gap-2 mb-2" style={{ gridTemplateColumns: '1.6fr 1fr 1fr auto' }}>
+            <div className={`${T.cardBg} border rounded-lg px-3 py-2`}
+              style={{
+                borderColor: theme === 'lunarpunk' ? 'rgba(109,143,248,0.3)' : theme === 'noctali' ? 'rgba(244,217,149,0.3)' : 'rgba(245,158,11,0.3)',
+                boxShadow: theme === 'lunarpunk' ? '0 0 15px rgba(109,143,248,0.06)' : theme === 'noctali' ? '0 0 15px rgba(244,217,149,0.06)' : 'none',
+              }}>
+              <div className={`text-xs ${T.accentMuted}`}>Total BTC</div>
+              <div className={`text-2xl font-bold tabular-nums ${T.accent}`}>{maskBalance(getTotalBtc(), 8)}</div>
             </div>
-            <div className={`${T.cardBg} border ${T.cardBorder} rounded-lg p-3`}>
+            <div className={`${T.cardBg} border ${T.cardBorder} rounded-lg px-3 py-2`}>
               <div className={`text-xs ${T.textMuted}`}>USD</div>
               <div className="text-xl font-semibold tabular-nums">{maskBalance(getTotalUsd())} $</div>
             </div>
-            <div className={`${T.cardBg} border ${T.cardBorder} rounded-lg p-3`}>
+            <div className={`${T.cardBg} border ${T.cardBorder} rounded-lg px-3 py-2`}>
               <div className={`text-xs ${T.textMuted}`}>EUR</div>
               <div className="text-xl font-semibold tabular-nums">{maskBalance(getTotalEur())} €</div>
             </div>
-            <button onClick={() => setShowForex(!showForex)} className={`flex items-end justify-center px-3 pb-2 ${T.textFaint} self-end`}>
+            <button onClick={() => setShowForex(!showForex)} className={`flex items-end justify-center px-3 pb-2 ${T.textFaint} self-end rounded border border-transparent hover:border-current/20 hover:bg-amber-500/10 hover:text-amber-500 transition-colors`}>
               <ChevronIcon size={16} className={`transition-transform duration-200 ${showForex ? 'rotate-180' : ''}`} />
             </button>
           </div>
@@ -854,215 +1300,555 @@ const App = () => {
           )}
 
           {/* Jauge répartition */}
-          <div className="mb-3">
+          <div className="mb-2">
             <div className={`flex h-1.5 rounded-full overflow-hidden ${T.barBg} mb-2`}>
-              {Object.entries(categories).map(([cat, cfg]) => {
-                const pct = getCategoryPercentage(cat);
-                return pct > 0 ? <div key={cat} style={{ width: `${pct}%`, backgroundColor: cfg.barColor }} className="transition-all" /> : null;
+              {categories.map(cat => {
+                const pct = getCategoryPercentage(cat.id);
+                return pct > 0 ? <div key={cat.id} style={{ width: `${pct}%`, backgroundColor: cat.bar_color }} className="transition-all" /> : null;
               })}
             </div>
-            <div className="flex gap-x-4 text-xs">
-              {Object.entries(categories).map(([cat, cfg]) => (
-                <div key={cat}>
-                  <span className={`font-semibold tabular-nums ${cfg.color}`}>{getCategoryPercentage(cat).toFixed(1)}%</span>
-                  <span className={`${T.textMuted} ml-1`}>{cfg.name}</span>
+            <div className="flex gap-x-4 text-xs flex-wrap">
+              {categories.map(cat => (
+                <div key={cat.id}>
+                  <span className={`font-semibold tabular-nums ${cat.color}`}>{getCategoryPercentage(cat.id).toFixed(1)}%</span>
+                  <span className={`${T.textMuted} ml-1`}>{cat.name}</span>
                 </div>
               ))}
             </div>
           </div>
 
           {/* Mini prix */}
-          <div className="grid grid-cols-5 gap-3">
+          <div className="grid grid-cols-5 gap-2">
             {['btc', 'eth', 'xmr', 'bch', 'ltc'].map(a => <MiniPriceCard key={a} asset={a} />)}
           </div>
         </div>
       </header>
 
       <main className="max-w-4xl mx-auto px-4 py-6 space-y-6 relative" style={{ zIndex: 2 }}>
-        {/* BITCOIN */}
-        <section>
-          <h2 className="text-sm font-semibold uppercase tracking-wide text-amber-500 mb-3">Bitcoin</h2>
-          <PriceCard asset="btc" walletCount={getWalletsByCategory('bitcoin').length} category="bitcoin" />
-          {expandedAssets['btc'] !== false && <div className="space-y-2">{getWalletsByCategory('bitcoin').map(renderWalletItem)}</div>}
-        </section>
 
-        {/* HEDGING */}
-        <section>
-          <h2 className="text-sm font-semibold uppercase tracking-wide text-red-700 mb-3">Hedging</h2>
-          {['xmr', 'bch', 'ltc'].map(asset => {
-            const ws = getWalletsByCategory('hedging').filter(w => w.asset === asset);
-            if (ws.length === 0) return (
-              <div key={asset} className={`${T.cardBg2} border ${T.cardBorder2} rounded-lg p-3 mb-2 flex items-center justify-between`}>
-                <div className="flex items-center gap-3">
-                  <span className={`px-2 py-1 rounded text-sm font-bold ${allAssets[asset].bg} ${allAssets[asset].color}`}>{allAssets[asset].symbol}</span>
-                  <div>
-                    <span className={T.textMuted}>Aucun wallet</span>
-                    <div><button onClick={() => addNewWallet('hedging', asset, `${allAssets[asset].name} Wallet`)} className={`text-xs ${T.textFaint}`}>+ Ajouter adresse</button></div>
-                  </div>
-                </div>
-              </div>
-            );
+        {/* Categories — sorted by display_order */}
+        {[...categories]
+          .sort((a, b) => a.display_order - b.display_order)
+          .map((category, catIdx, sortedCats) => {
+            const catWallets = wallets.filter(w => w.category_id === category.id);
+            const uniqueAssets = [...new Set(catWallets.map(w => w.asset))];
+            const pct = getCategoryPercentage(category.id);
+            const isEditingCat = editingCatId === category.id;
+            const isFirst = catIdx === 0;
+            const isLast = catIdx === sortedCats.length - 1;
+
             return (
-              <div key={asset}>
-                <PriceCard asset={asset} walletCount={ws.length} category="hedging" />
-                {expandedAssets[asset] !== false && <div className="space-y-2 mb-4">{ws.map(renderWalletItem)}</div>}
-              </div>
-            );
-          })}
-        </section>
+              <section key={category.id} className={`transition-all rounded-xl border ${T.cardBorder} ${T.cardBg} p-4`}>
+                {/* Category header — arrows + inline editable name + percentage + TokenSearch inline */}
+                <div className="group flex items-center gap-2 mb-3">
+                  {/* Reorder arrows */}
+                  {categories.length > 1 && (
+                    <div className="flex flex-col gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button
+                        onClick={() => !isFirst && handleArrowClick(category.id, -1)}
+                        className={`p-1 rounded transition-colors border border-transparent hover:border-current/20 ${isFirst ? 'text-zinc-700 cursor-default' : `${T.textFaint} hover:text-amber-500 hover:bg-amber-500/10`}`}
+                        title={isFirst ? '' : '1 clic: monter — 2 clics: tout en haut'}
+                        disabled={isFirst}
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none"
+                          stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                          <polyline points="18 15 12 9 6 15"/>
+                        </svg>
+                      </button>
+                      <button
+                        onClick={() => !isLast && handleArrowClick(category.id, 1)}
+                        className={`p-1 rounded transition-colors border border-transparent hover:border-current/20 ${isLast ? 'text-zinc-700 cursor-default' : `${T.textFaint} hover:text-amber-500 hover:bg-amber-500/10`}`}
+                        title={isLast ? '' : '1 clic: descendre — 2 clics: tout en bas'}
+                        disabled={isLast}
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none"
+                          stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                          <polyline points="6 9 12 15 18 9"/>
+                        </svg>
+                      </button>
+                    </div>
+                  )}
 
-        {/* ALTCOINS */}
-        <section>
-          <h2 className="text-sm font-semibold uppercase tracking-wide text-violet-500 mb-3">Altcoins</h2>
-          <div className="relative mb-4">
-            <input type="text" value={altcoinSearch} onChange={e => { setAltcoinSearch(e.target.value); setShowAltcoinDropdown(true); }}
-              onFocus={() => setShowAltcoinDropdown(true)} placeholder="🔍 Rechercher et ajouter un altcoin..."
-              className={`w-full px-4 py-3 ${T.cardBg} border ${T.cardBorder2} rounded-lg text-sm focus:outline-none focus:border-violet-500`} />
-            {showAltcoinDropdown && (
-              <div className={`absolute z-20 mt-1 w-full ${T.dropBg} border ${T.dropBorder} rounded-lg max-h-64 overflow-auto shadow-xl`}>
-                {filteredAltcoins.map(alt => {
-                  const has = wallets.some(w => w.asset === alt.symbol && w.category === 'altcoins');
+                  {/* Category name — click to edit inline */}
+                  {isEditingCat ? (
+                    <input
+                      autoFocus
+                      type="text"
+                      value={catNameDraft}
+                      onChange={e => setCatNameDraft(e.target.value)}
+                      onBlur={() => saveCatName(category.id)}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') saveCatName(category.id);
+                        if (e.key === 'Escape') setEditingCatId(null);
+                      }}
+                      className={`text-sm font-semibold uppercase tracking-wide ${category.color} bg-transparent border-b border-current focus:outline-none px-0 py-0 w-40`}
+                    />
+                  ) : (
+                    <h2
+                      onClick={() => startEditCatName(category)}
+                      className={`text-sm font-semibold uppercase tracking-wide ${category.color} cursor-text hover:opacity-80 transition-opacity select-none`}
+                      title="Cliquer pour renommer"
+                    >
+                      {category.name}
+                    </h2>
+                  )}
+
+                  {/* Percentage next to name */}
+                  <span className={`text-xs font-medium tabular-nums ${T.textMuted}`}>
+                    {pct.toFixed(1)}%
+                  </span>
+
+                  <div className="flex-1" />
+
+                  {/* Token search — inline on same line */}
+                  <TokenSearch category={category} altcoins={altcoinsList} onAddToken={handleAddToken} />
+
+                  {/* Delete button — only if more than 1 category */}
+                  {categories.length > 1 && (
+                    <button
+                      onClick={() => deleteCategory(category.id)}
+                      className={`opacity-0 group-hover:opacity-100 transition-opacity ${T.textFaint} hover:text-red-500 p-1`}
+                      title="Supprimer cette catégorie"
+                    >
+                      <TrashIcon />
+                    </button>
+                  )}
+                </div>
+
+                {/* Assets & wallets */}
+                {uniqueAssets.length > 0 ? uniqueAssets.map(asset => {
+                  const ws = catWallets.filter(w => w.asset === asset);
+                  if (ws.length === 0) return null;
                   return (
-                    <div key={alt.symbol} onClick={() => addAltcoinWallet(alt.symbol)}
-                      className={`px-4 py-3 ${T.rowHover} cursor-pointer flex justify-between items-center border-b ${T.dropBorder} last:border-0 ${has ? 'opacity-50' : ''}`}>
-                      <div><span className="font-medium">{alt.name}</span><span className={`${T.textMuted} ml-2`}>({alt.symbol.toUpperCase()})</span></div>
-                      <div className="flex items-center gap-2">
-                        {alt.can_fetch && <span className="text-xs text-green-500 bg-green-500/10 px-2 py-0.5 rounded">auto</span>}
-                        {has && <span className={`text-xs ${T.textMuted}`}>déjà ajouté</span>}
-                      </div>
+                    <div key={asset}>
+                      <PriceCard asset={asset} walletCount={ws.length} category={category.id} />
+                      {expandedAssets[asset] !== false && <div className="space-y-1.5 mb-3">{ws.map(renderWalletItem)}</div>}
                     </div>
                   );
-                })}
-                {filteredAltcoins.length === 0 && <div className={`px-4 py-3 ${T.textMuted}`}>Aucun altcoin trouvé</div>}
-              </div>
-            )}
-          </div>
-          {getUniqueAssetsInCategory('altcoins').map(asset => {
-            const ws = getWalletsByCategory('altcoins').filter(w => w.asset === asset);
-            return (
-              <div key={asset}>
-                <PriceCard asset={asset} walletCount={ws.length} category="altcoins" />
-                {expandedAssets[asset] !== false && <div className="space-y-2 mb-4">{ws.map(renderWalletItem)}</div>}
-              </div>
+                }) : (
+                  <div className={`text-center py-6 ${T.textMuted} text-sm border-2 border-dashed ${T.cardBorder2} rounded-lg`}>
+                    Aucun wallet. Utilisez la barre de recherche pour en ajouter.
+                  </div>
+                )}
+              </section>
             );
           })}
-          {getWalletsByCategory('altcoins').length === 0 && <div className={`text-center py-8 ${T.textMuted} text-sm`}>Utilisez la barre de recherche pour ajouter des altcoins</div>}
-        </section>
+
+        {/* ── Bouton Ajouter une catégorie ── */}
+        <button
+          onClick={addCategory}
+          className={`w-full py-3.5 px-4 border-2 border-dashed ${T.cardBorder2} rounded-xl ${T.textMuted} hover:border-amber-500/50 hover:text-amber-500 transition-all text-sm font-medium flex items-center justify-center gap-2`}
+        >
+          <span className="text-lg leading-none">+</span>
+          Ajouter une catégorie
+        </button>
 
         <footer className={`pt-4 border-t ${T.headerBorder} text-center text-xs ${T.textFaint}`}>
           {theme === 'noctali' ? (
             <span>JANUS — <span style={{ color: '#F4D995' }}>Les anneaux brillent au clair de lune</span> · Extraction 60% · Recapitalisation 40%</span>
+          ) : theme === 'lunarpunk' ? (
+            <span>JANUS — <span style={{ color: '#6d8ff8' }}>Beyond the dunes, the signal persists</span> · Extraction 60% · Recapitalisation 40%</span>
           ) : (
             'JANUS — Extraction 60% • Recapitalisation 40%'
           )}
         </footer>
       </main>
 
-      {showAltcoinDropdown && <div className="fixed inset-0 z-10" onClick={() => setShowAltcoinDropdown(false)} />}
 
-      {/* Settings drawer */}
-      <div className={`fixed top-0 right-0 h-full w-80 ${T.cardBg} border-l ${T.cardBorder2} shadow-2xl z-50 transform transition-transform duration-300 ease-in-out ${showSettings ? 'translate-x-0' : 'translate-x-full'}`}>
+      {/* ── Unified Menu Drawer ── */}
+      <div className={`fixed top-0 right-0 h-full w-80 ${T.cardBg} border-l ${T.cardBorder2} shadow-2xl z-50 transform transition-transform duration-300 ease-in-out ${showMenuDrawer ? 'translate-x-0' : 'translate-x-full'}`}>
         <div className="p-5 h-full flex flex-col">
-          <div className="flex items-center justify-between mb-5">
-            <h2 className="text-lg font-semibold">Paramètres</h2>
-            <button onClick={() => setShowSettings(false)} className={`p-1.5 rounded-lg ${T.inputBg} ${T.textMuted} hover:opacity-80`}>✕</button>
-          </div>
-          <div className="space-y-5 flex-1 overflow-auto">
-            <div>
-              <label className={`block text-sm ${T.textMuted} mb-2`}>Thème</label>
-              <div className="flex gap-2 flex-wrap">
-                {[
-                  { key: 'dark', label: '🌙 Sombre' },
-                  { key: 'light', label: '☀️ Clair' },
-                  { key: 'sepia', label: '📜 Sépia' },
-                  { key: 'noctali', label: '🌑 Noctali spécial édition' },
-                ].map(opt => (
-                  <button key={opt.key} onClick={() => setTheme(opt.key)}
-                    className={`flex-1 px-3 py-2 rounded text-sm border ${theme === opt.key
-                      ? 'border-amber-500 bg-amber-500/10 text-amber-500'
-                      : `${T.inputBorder} ${T.inputBg} ${T.textMuted}`}`}>
-                    {opt.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div>
-              <label className={`block text-sm ${T.textMuted} mb-1`}>Clé API Etherscan</label>
-              <input type="text" value={etherscanApiKey} onChange={e => setEtherscanApiKey(e.target.value)}
-                placeholder="Votre clé API..." className={`w-full px-3 py-2 ${T.inputBg} border ${T.inputBorder} rounded text-sm font-mono focus:outline-none`} />
-              <p className={`text-xs ${T.textFaint} mt-1`}>Requis pour ETH/ERC-20. <a href="https://etherscan.io/apis" target="_blank" rel="noopener" className="text-amber-500 hover:underline">etherscan.io/apis</a></p>
-            </div>
-          </div>
-          <button onClick={saveSettings} className="w-full px-4 py-2.5 bg-amber-500 text-zinc-900 rounded-lg text-sm font-medium hover:bg-amber-400 mt-4">Sauvegarder</button>
-        </div>
-      </div>
-      {showSettings && <div className="fixed inset-0 bg-black/30 z-40" onClick={() => setShowSettings(false)} />}
-
-      {/* Profils drawer */}
-      <div className={`fixed top-0 right-0 h-full w-80 ${T.cardBg} border-l ${T.cardBorder2} shadow-2xl z-50 transform transition-transform duration-300 ease-in-out ${showProfileOverlay ? 'translate-x-0' : 'translate-x-full'}`}>
-        <div className="p-5 h-full flex flex-col">
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-lg font-semibold">Profils</h2>
-            <button onClick={() => setShowProfileOverlay(false)} className={`p-1.5 rounded-lg ${T.inputBg} ${T.textMuted} hover:opacity-80`}>✕</button>
-          </div>
-          {/* Active profile indicator */}
-          <div className={`flex items-center gap-2 px-3 py-2.5 rounded-lg ${T.cardBg2} border ${T.cardBorder2} mb-4`}>
-            <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse flex-shrink-0" />
-            <span className={`text-xs ${T.textMuted}`}>Profil actif :</span>
-            <span className="text-sm font-medium text-amber-500">{activeProfile}</span>
-          </div>
-          <div className="space-y-4 flex-1 overflow-auto">
-            {/* Save */}
-            <div>
-              <label className={`block text-sm ${T.textMuted} mb-1`}>Nouveau profil</label>
-              <div className="flex gap-1">
-                <input type="text" value={newProfileName} onChange={e => setNewProfileName(e.target.value)}
-                  onKeyDown={e => e.key === 'Enter' && handleSaveProfile()}
-                  placeholder="Nom du profil..." className={`flex-1 px-3 py-2 ${T.inputBg} border ${T.inputBorder} rounded text-sm focus:outline-none focus:border-amber-500/50`} />
-                <button onClick={handleSaveProfile} className="px-3 py-2 bg-amber-500 text-zinc-900 rounded text-sm font-medium hover:bg-amber-400 transition-colors flex items-center gap-1"><SaveIcon size={14} /> Sauver</button>
-              </div>
-              <p className={`text-xs ${T.textFaint} mt-1`}>Auto-save toutes les 2 min</p>
-            </div>
-            {/* Load */}
-            <div>
-              <label className={`block text-sm ${T.textMuted} mb-1`}>Charger un profil</label>
-              {profiles.filter(p => p !== '__autosave__').length > 0 ? (
-                <div className="space-y-1 max-h-60 overflow-auto">
-                  {profiles.filter(p => p !== '__autosave__').map(p => (
-                    <div key={p} className={`flex items-center justify-between px-3 py-2.5 rounded-lg border group transition-colors ${p === activeProfile ? `${T.cardBg} border-amber-500/40` : `${T.rowBg} ${T.rowBorder} hover:border-amber-500/20`}`}>
-                      <button onClick={() => handleLoadProfile(p)} className="text-sm flex-1 text-left flex items-center gap-2">
-                        {p === activeProfile && <span className="text-amber-500 text-xs">●</span>}
-                        <span className={p === activeProfile ? 'text-amber-500 font-medium' : ''}>{p}</span>
-                      </button>
-                      <button onClick={() => handleDeleteProfile(p)} className={`${T.textFaint} hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all p-1`}>
-                        <TrashIcon />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className={`text-sm ${T.textFaint} py-2`}>Aucun profil sauvegardé</p>
+          {/* Header with back arrow or close */}
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2">
+              {menuView !== 'main' && (
+                <button onClick={() => setMenuView('main')} className={`p-1 rounded-lg ${T.textMuted} hover:text-amber-500 transition-colors`}>
+                  <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="15 18 9 12 15 6"/>
+                  </svg>
+                </button>
               )}
+              <h2 className="text-lg font-semibold">
+                {menuView === 'main' ? 'Menu' : menuView === 'profiles' ? 'Profils' : menuView === 'settings' ? 'Paramètres' : 'Sécurité'}
+              </h2>
             </div>
+            <button onClick={() => setShowMenuDrawer(false)} className={`p-1.5 rounded-lg ${T.inputBg} ${T.textMuted} hover:opacity-80`}>✕</button>
           </div>
-          <div className="space-y-2 mt-4">
-            <button onClick={startAnonymous} className={`w-full px-4 py-2.5 ${T.inputBg} ${T.textMuted} rounded-lg text-sm hover:opacity-80 border ${T.inputBorder} transition-colors flex items-center justify-center gap-2`}>
-              👻 Profil anonyme temporaire
-            </button>
-            <button onClick={handleReset} className="w-full px-4 py-2.5 bg-red-500/10 text-red-400 rounded-lg text-sm hover:bg-red-500/20 border border-red-500/20">Reset / Créer nouveau profil vierge</button>
-          </div>
+
+          {/* ── MAIN VIEW ── */}
+          {menuView === 'main' && (
+            <div className="space-y-2 flex-1">
+              <button onClick={() => { setMenuView('profiles'); loadProfiles(); }}
+                className={`w-full px-4 py-3 ${T.inputBg} rounded-lg text-sm border ${T.inputBorder} transition-colors hover:border-amber-500/30 flex items-center gap-3`}>
+                <span className="text-base">👤</span>
+                <div className="text-left flex-1">
+                  <div className="font-medium">Profils</div>
+                  <div className={`text-xs ${T.textFaint}`}>Actif : <span className="text-amber-500">{activeProfile}</span></div>
+                </div>
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={T.textFaint}>
+                  <polyline points="9 18 15 12 9 6"/>
+                </svg>
+              </button>
+              <button onClick={() => setMenuView('settings')}
+                className={`w-full px-4 py-3 ${T.inputBg} rounded-lg text-sm border ${T.inputBorder} transition-colors hover:border-amber-500/30 flex items-center gap-3`}>
+                <span className="text-base">⚙</span>
+                <div className="text-left flex-1"><div className="font-medium">Paramètres</div></div>
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={T.textFaint}>
+                  <polyline points="9 18 15 12 9 6"/>
+                </svg>
+              </button>
+              <button onClick={() => { setShowMenuDrawer(false); setShowPendingPanel(true); }}
+                className={`w-full px-4 py-3 ${T.inputBg} rounded-lg text-sm border ${T.inputBorder} transition-colors hover:border-amber-500/30 flex items-center gap-3`}>
+                <span className="text-base">🔔</span>
+                <div className="text-left flex-1"><div className="font-medium">Transactions en attente</div></div>
+                {pendingCount > 0 && <span className="bg-red-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center font-bold">{pendingCount}</span>}
+              </button>
+              <button onClick={() => setMenuView('security')}
+                className={`w-full px-4 py-3 ${T.inputBg} rounded-lg text-sm border ${T.inputBorder} transition-colors hover:border-amber-500/30 flex items-center gap-3`}>
+                <span className="text-base">🔒</span>
+                <div className="text-left flex-1">
+                  <div className="font-medium">Sécurité</div>
+                  <div className={`text-xs ${T.textFaint}`}>{profileSecurity.has_pin ? 'PIN actif' : 'Non protégé'}</div>
+                </div>
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={T.textFaint}>
+                  <polyline points="9 18 15 12 9 6"/>
+                </svg>
+              </button>
+              {profileSecurity.has_pin && (
+                <button onClick={() => { setShowMenuDrawer(false); setIsLocked(true); setPinInput(''); }}
+                  className={`w-full px-4 py-3 ${T.inputBg} rounded-lg text-sm border border-amber-500/20 transition-colors hover:border-amber-500/40 flex items-center gap-3`}>
+                  <span className="text-base">🔐</span>
+                  <div className="text-left flex-1"><div className="font-medium text-amber-500">Verrouiller maintenant</div></div>
+                </button>
+              )}
+              <div className={`border-t ${T.cardBorder2} my-2`} />
+              <button onClick={() => { setShowMenuDrawer(false); startAnonymous(); }}
+                className={`w-full px-4 py-3 ${T.inputBg} rounded-lg text-sm border ${T.inputBorder} transition-colors hover:border-amber-500/30 flex items-center gap-3`}>
+                <span className="text-base">👻</span>
+                <div className="text-left flex-1"><div className="font-medium">Profil anonyme temporaire</div></div>
+              </button>
+              <button onClick={() => { setShowMenuDrawer(false); handleReset(); }}
+                className="w-full px-4 py-3 bg-red-500/10 text-red-400 rounded-lg text-sm hover:bg-red-500/20 border border-red-500/20 flex items-center gap-3">
+                <span className="text-base">🗑</span>
+                <div className="text-left flex-1"><div className="font-medium">Reset / Nouveau profil vierge</div></div>
+              </button>
+            </div>
+          )}
+
+          {/* ── PROFILES VIEW ── */}
+          {menuView === 'profiles' && (
+            <div className="flex-1 flex flex-col overflow-hidden">
+              {/* Active profile indicator */}
+              <div className={`flex items-center gap-2 px-3 py-2.5 rounded-lg ${T.cardBg2} border ${T.cardBorder2} mb-4`}>
+                <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse flex-shrink-0" />
+                <span className={`text-xs ${T.textMuted}`}>Profil actif :</span>
+                <span className="text-sm font-medium text-amber-500">{activeProfile}</span>
+              </div>
+              {/* Save */}
+              <div className="mb-4">
+                <label className={`block text-sm ${T.textMuted} mb-1`}>Nouveau profil</label>
+                <div className="flex gap-1">
+                  <input type="text" value={newProfileName} onChange={e => setNewProfileName(e.target.value)}
+                    onKeyDown={e => e.key === 'Enter' && handleSaveProfile()}
+                    placeholder="Nom du profil..." className={`flex-1 px-3 py-2 ${T.inputBg} border ${T.inputBorder} rounded text-sm focus:outline-none focus:border-amber-500/50`} />
+                  <button onClick={handleSaveProfile} className="px-3 py-2 bg-amber-500 text-zinc-900 rounded text-sm font-medium hover:bg-amber-400 transition-colors flex items-center gap-1"><SaveIcon size={14} /> Sauver</button>
+                </div>
+                <p className={`text-xs ${T.textFaint} mt-1`}>Auto-save toutes les 2 min</p>
+              </div>
+              {/* Load */}
+              <div className="flex-1 overflow-auto">
+                <label className={`block text-sm ${T.textMuted} mb-1`}>Charger un profil</label>
+                {profiles.filter(p => p !== '__autosave__').length > 0 ? (
+                  <div className="space-y-1">
+                    {profiles.filter(p => p !== '__autosave__').map(p => (
+                      <div key={p} className={`flex items-center justify-between px-3 py-2.5 rounded-lg border group transition-colors ${p === activeProfile ? `${T.cardBg} border-amber-500/40` : `${T.rowBg} ${T.rowBorder} hover:border-amber-500/20`}`}>
+                        <button onClick={() => handleLoadProfile(p)} className="text-sm flex-1 text-left flex items-center gap-2">
+                          {p === activeProfile && <span className="text-amber-500 text-xs">●</span>}
+                          <span className={p === activeProfile ? 'text-amber-500 font-medium' : ''}>{p}</span>
+                        </button>
+                        <button onClick={() => handleDeleteProfile(p)} className={`${T.textFaint} hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all p-1`}>
+                          <TrashIcon />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className={`text-sm ${T.textFaint} py-2`}>Aucun profil sauvegardé</p>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* ── SETTINGS VIEW ── */}
+          {menuView === 'settings' && (
+            <div className="flex-1 flex flex-col overflow-auto">
+              <div className="space-y-5 flex-1">
+                <div>
+                  <label className={`block text-sm ${T.textMuted} mb-2`}>Thème</label>
+                  <div className="flex gap-2 mb-3">
+                    {[
+                      { key: 'dark', label: '🌙 Sombre' },
+                      { key: 'light', label: '☀️ Clair' },
+                      { key: 'sepia', label: '📜 Sépia' },
+                    ].map(opt => (
+                      <button key={opt.key} onClick={() => setTheme(opt.key)}
+                        className={`flex-1 px-3 py-2 rounded text-sm border ${theme === opt.key
+                          ? `${T.accentBorder} ${T.accent} bg-opacity-10`
+                          : `${T.inputBorder} ${T.inputBg} ${T.textMuted}`}`}
+                        style={theme === opt.key ? { backgroundColor: 'rgba(245,158,11,0.1)' } : {}}>
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                  {/* Special Edition dropdown */}
+                  <details className={`group rounded-lg border ${T.inputBorder} ${T.inputBg} overflow-hidden`}>
+                    <summary className={`flex items-center justify-between px-3 py-2.5 cursor-pointer text-sm ${T.textMuted} select-none hover:opacity-80`}>
+                      <span>✨ Spécial Édition {(theme === 'noctali' || theme === 'lunarpunk') && <span className={T.accent}>●</span>}</span>
+                      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+                        className={`${T.textFaint} transition-transform group-open:rotate-90`}>
+                        <polyline points="9 18 15 12 9 6"/>
+                      </svg>
+                    </summary>
+                    <div className="px-2 pb-2 pt-1 space-y-1">
+                      {[
+                        { key: 'noctali', label: '🌑 Noctali', desc: 'v1.0 — Umbreon starfield', accent: '#F4D995' },
+                        { key: 'lunarpunk', label: '🔮 Lunar Punk', desc: 'v2.0 — Désert dystopique', accent: '#6d8ff8' },
+                      ].map(opt => (
+                        <button key={opt.key} onClick={() => setTheme(opt.key)}
+                          className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm border transition-all ${theme === opt.key
+                            ? ''
+                            : `${T.inputBorder} hover:opacity-80`}`}
+                          style={theme === opt.key ? { backgroundColor: `${opt.accent}15`, borderColor: `${opt.accent}66` } : {}}>
+                          <div className="text-left flex-1">
+                            <div className={`font-medium ${theme === opt.key ? '' : T.textMuted}`}
+                              style={theme === opt.key ? { color: opt.accent } : {}}>{opt.label}</div>
+                            <div className={`text-[10px] ${T.textFaint}`}>{opt.desc}</div>
+                          </div>
+                          {theme === opt.key && <span style={{ color: opt.accent }}>✓</span>}
+                        </button>
+                      ))}
+                    </div>
+                  </details>
+                </div>
+                <div>
+                  <label className={`block text-sm ${T.textMuted} mb-1`}>Clé API Etherscan</label>
+                  <input type="text" value={etherscanApiKey} onChange={e => setEtherscanApiKey(e.target.value)}
+                    placeholder="Votre clé API..." className={`w-full px-3 py-2 ${T.inputBg} border ${T.inputBorder} rounded text-sm font-mono focus:outline-none`} />
+                  <p className={`text-xs ${T.textFaint} mt-1`}>Requis pour ETH/ERC-20. <button onClick={() => invoke('open_url', { url: 'https://etherscan.io/apis' })} className="text-amber-500 hover:underline">etherscan.io/apis</button></p>
+                </div>
+                <div className="border-t pt-4">
+                  <label className="flex items-center gap-3 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={monitoringEnabled}
+                      onChange={async (e) => {
+                        const enabled = e.target.checked;
+                        setMonitoringEnabled(enabled);
+                        try {
+                          await invoke('set_monitoring_enabled', { enabled });
+                          showToast(enabled ? '✅ Monitoring activé' : '⚠️ Monitoring désactivé', 2000);
+                        } catch (err) {
+                          console.error('Erreur toggle monitoring:', err);
+                        }
+                      }}
+                      className="w-4 h-4 text-amber-500 rounded focus:ring-2 focus:ring-amber-500"
+                    />
+                    <div>
+                      <div className="text-sm font-medium">Monitoring des transactions</div>
+                      <div className={`text-xs ${T.textFaint}`}>
+                        Surveiller automatiquement les nouvelles transactions
+                      </div>
+                    </div>
+                  </label>
+                </div>
+              </div>
+              <button onClick={saveSettings} className="w-full px-4 py-2.5 bg-amber-500 text-zinc-900 rounded-lg text-sm font-medium hover:bg-amber-400 mt-4">Sauvegarder</button>
+            </div>
+          )}
+
+          {/* ── SECURITY VIEW ── */}
+          {menuView === 'security' && (
+            <div className="flex-1 flex flex-col overflow-auto">
+              <div className="space-y-5 flex-1">
+                {/* Current status */}
+                <div className={`flex items-center gap-3 px-3 py-3 rounded-lg border ${profileSecurity.has_pin ? 'border-green-500/30 bg-green-500/5' : `${T.inputBorder} ${T.inputBg}`}`}>
+                  <span className="text-lg">{profileSecurity.has_pin ? '🔒' : '🔓'}</span>
+                  <div>
+                    <div className={`text-sm font-medium ${profileSecurity.has_pin ? 'text-green-500' : T.textMuted}`}>
+                      {profileSecurity.has_pin ? 'Profil protégé' : 'Profil non protégé'}
+                    </div>
+                    <div className={`text-xs ${T.textFaint}`}>{activeProfile}</div>
+                  </div>
+                </div>
+
+                {profileSecurity.has_pin ? (
+                  <>
+                    {/* Inactivity timer */}
+                    <div>
+                      <label className={`block text-sm ${T.textMuted} mb-2`}>Verrouillage automatique</label>
+                      <select value={profileSecurity.inactivity_minutes}
+                        onChange={async (e) => {
+                          const mins = parseInt(e.target.value);
+                          try {
+                            await invoke('set_profile_pin', { profileName: activeProfile, pinHash: '__KEEP__', inactivityMinutes: mins });
+                            setProfileSecurity(prev => ({ ...prev, inactivity_minutes: mins }));
+                            showToast(mins > 0 ? `Verrouillage après ${mins} min` : 'Verrouillage auto désactivé');
+                          } catch(_) {}
+                        }}
+                        className={`w-full px-3 py-2.5 ${T.inputBg} border ${T.inputBorder} rounded-lg text-sm`}>
+                        <option value={0}>Désactivé</option>
+                        <option value={1}>1 minute</option>
+                        <option value={2}>2 minutes</option>
+                        <option value={5}>5 minutes</option>
+                        <option value={10}>10 minutes</option>
+                        <option value={15}>15 minutes</option>
+                        <option value={30}>30 minutes</option>
+                      </select>
+                    </div>
+
+                    {/* Lock now */}
+                    <button onClick={() => { setShowMenuDrawer(false); setIsLocked(true); setPinInput(''); }}
+                      className="w-full px-4 py-2.5 bg-amber-500 text-zinc-900 rounded-lg text-sm font-medium hover:bg-amber-400 flex items-center justify-center gap-2">
+                      🔐 Verrouiller maintenant
+                    </button>
+
+                    {/* Change PIN */}
+                    <div className="border-t pt-4">
+                      <label className={`block text-sm ${T.textMuted} mb-2`}>Changer le PIN</label>
+                      <div className="flex gap-1">
+                        <input type="password" maxLength={20} placeholder="Nouveau PIN..."
+                          id="pin-change-input"
+                          className={`flex-1 px-3 py-2 ${T.inputBg} border ${T.inputBorder} rounded text-sm focus:outline-none focus:border-amber-500/50`}
+                          onKeyDown={e => { if (e.key === 'Enter') document.getElementById('pin-change-confirm')?.click(); }} />
+                        <button id="pin-change-confirm" onClick={async () => {
+                          const input = document.getElementById('pin-change-input');
+                          const val = input?.value?.trim();
+                          if (!val || val.length < 4) { showToast('PIN trop court (min 4)'); return; }
+                          const h = await hashPin(val);
+                          await invoke('set_profile_pin', { profileName: activeProfile, pinHash: h, inactivityMinutes: profileSecurity.inactivity_minutes || 5 });
+                          input.value = '';
+                          showToast('🔒 PIN modifié');
+                        }} className="px-3 py-2 bg-amber-500 text-zinc-900 rounded text-sm font-medium hover:bg-amber-400">Changer</button>
+                      </div>
+                    </div>
+
+                    {/* Remove PIN */}
+                    <button onClick={async () => {
+                      if (await showConfirm('Supprimer le PIN de ce profil ?')) {
+                        await invoke('remove_profile_pin', { profileName: activeProfile });
+                        setProfileSecurity({ has_pin: false, inactivity_minutes: 0 });
+                        showToast('PIN supprimé');
+                      }
+                    }} className="w-full px-4 py-2.5 bg-red-500/10 text-red-400 rounded-lg text-sm hover:bg-red-500/20 border border-red-500/20">
+                      Supprimer le PIN
+                    </button>
+                  </>
+                ) : (
+                  <div className="space-y-3">
+                    <p className={`text-sm ${T.textMuted}`}>Ajouter un PIN ou mot de passe pour protéger ce profil. L'écran se verrouillera après un délai d'inactivité configurable.</p>
+                    <div className="flex gap-1">
+                      <input type="password" maxLength={20} placeholder="PIN ou mot de passe (min 4)..."
+                        id="pin-setup-input"
+                        className={`flex-1 px-3 py-2.5 ${T.inputBg} border ${T.inputBorder} rounded-lg text-sm focus:outline-none focus:border-amber-500/50`}
+                        onKeyDown={e => { if (e.key === 'Enter') document.getElementById('pin-setup-confirm')?.click(); }} />
+                      <button id="pin-setup-confirm" onClick={async () => {
+                        const input = document.getElementById('pin-setup-input');
+                        const val = input?.value?.trim();
+                        if (!val || val.length < 4) { showToast('PIN trop court (min 4)'); return; }
+                        const h = await hashPin(val);
+                        await invoke('set_profile_pin', { profileName: activeProfile, pinHash: h, inactivityMinutes: 5 });
+                        setProfileSecurity({ has_pin: true, inactivity_minutes: 5 });
+                        input.value = '';
+                        showToast('🔒 PIN activé (verrou auto: 5 min)');
+                      }} className="px-4 py-2.5 bg-amber-500 text-zinc-900 rounded-lg text-sm font-medium hover:bg-amber-400">Activer</button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       </div>
-      {showProfileOverlay && <div className="fixed inset-0 bg-black/30 z-40" onClick={() => setShowProfileOverlay(false)} />}
+      {showMenuDrawer && <div className="fixed inset-0 bg-black/30 z-40" onClick={() => setShowMenuDrawer(false)} />}
+
+      {/* ── Bitcoin Whitepaper Overlay ── */}
+      {showWhitepaper && (
+        <div className="fixed inset-0 z-[999] bg-black/95 flex flex-col" onClick={(e) => { if (e.target === e.currentTarget) setShowWhitepaper(false); }}>
+          <div className="flex items-center justify-between px-6 py-3 border-b border-zinc-800">
+            <div className="flex items-center gap-3">
+              <span className="text-amber-500 font-bold text-lg">₿</span>
+              <span className="text-zinc-300 font-medium">Bitcoin: A Peer-to-Peer Electronic Cash System</span>
+              <span className="text-zinc-600 text-xs">Satoshi Nakamoto · 2008</span>
+            </div>
+            <button onClick={() => setShowWhitepaper(false)} className="text-zinc-500 hover:text-amber-500 text-xl transition-colors">✕</button>
+          </div>
+          <iframe src="https://bitcoin.org/bitcoin.pdf" className="flex-1 w-full bg-zinc-900" title="Bitcoin Whitepaper" />
+        </div>
+      )}
+
+      {/* Persistent pending TX bar */}
+      {pendingCount > 0 && !pendingBarHidden && (
+        <div className="fixed bottom-14 left-1/2 -translate-x-1/2 z-[55] animate-fade-in">
+          <div className={`${T.cardBg} border ${T.cardBorder2} rounded-lg px-3 py-2 shadow-xl flex items-center gap-3`}>
+            <button onClick={() => setPendingBarHidden(true)} className={`${T.textFaint} hover:text-red-400 text-xs`}>✕</button>
+            <button onClick={() => setShowPendingPanel(true)} className="flex items-center gap-3 hover:opacity-80 transition-opacity">
+              <span className="text-amber-500 animate-pulse text-sm">●</span>
+              <span className={`text-sm ${T.textMuted}`}>{pendingCount} TX en attente</span>
+              <div className="w-16 h-1.5 bg-zinc-700 rounded-full overflow-hidden">
+                <div className="h-full bg-amber-500 animate-pulse rounded-full" style={{ width: '60%' }} />
+              </div>
+              <span className={`text-xs ${T.textFaint}`}>Voir →</span>
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Toast notification */}
       {toast && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[60] animate-fade-in">
-          <div className={`${T.cardBg} border ${T.cardBorder2} rounded-lg px-4 py-2 shadow-xl text-sm ${T.textMuted}`}>
-            {toast}
+          <div className={`${T.cardBg} border ${T.cardBorder2} rounded-lg px-4 py-2 shadow-xl text-sm ${T.textMuted} flex items-center gap-2`}>
+            <span>{toast}</span>
+            <button onClick={() => setToast(null)} className={`${T.textFaint} hover:text-amber-500 ml-1 -mr-1`}>✕</button>
           </div>
         </div>
       )}
+      {/* Pending Transactions Panel */}
+      <PendingTransactionsPanel
+      show={showPendingPanel}
+      onClose={() => setShowPendingPanel(false)}
+      onBackToMenu={() => { setShowPendingPanel(false); setShowMenuDrawer(true); setMenuView('main'); }}
+      wallets={wallets}
+      theme={theme}
+      />
+
+      {/* ── Lock Screen ── */}
+      {isLocked && (
+        <div className="fixed inset-0 z-[9999] bg-zinc-900 flex flex-col items-center justify-center select-none">
+          <div className="text-center mb-8">
+            <div className="text-5xl mb-4">🔒</div>
+            <h1 className="text-xl font-bold text-zinc-200 mb-1">JANUS Monitor</h1>
+            <p className="text-sm text-zinc-500">Profil verrouillé : <span className="text-amber-500">{activeProfile}</span></p>
+          </div>
+          <div className="w-72 space-y-3">
+            <input
+              type="password"
+              value={pinInput}
+              onChange={e => { setPinInput(e.target.value); setPinError(''); }}
+              onKeyDown={e => { if (e.key === 'Enter') handleUnlock(); }}
+              placeholder="PIN ou mot de passe..."
+              autoFocus
+              className="w-full px-4 py-3 bg-zinc-800 border border-zinc-700 rounded-lg text-center text-lg tracking-widest text-zinc-100 focus:outline-none focus:border-amber-500/50 placeholder:text-zinc-600 placeholder:tracking-normal placeholder:text-sm"
+            />
+            {pinError && <p className="text-red-400 text-xs text-center">{pinError}</p>}
+            <button onClick={handleUnlock}
+              className="w-full px-4 py-3 bg-amber-500 text-zinc-900 rounded-lg font-medium hover:bg-amber-400 transition-colors">
+              Déverrouiller
+            </button>
+          </div>
+          <p className="text-zinc-700 text-xs mt-8">Appuyez sur Entrée pour valider</p>
+        </div>
+      )}
+
     </div>
   );
 };
