@@ -33,6 +33,8 @@ Limiter les sorties d'infos en clair sur "quel portefeuiilles sont catégoriser"
 
 Reflechir et tester des solution pour xmr et pivx. Voir si l'on a pas moyen de lire sur la chaine avec les bonnes clés de validation/verification. Ce sont des monnaies anon mais elle fournit aussi des moyen étendu pour les possesseur des clés. 
 
+Changer l'architecture pour avoir plusieur fichier par famille de coin et pas tout dans le lib.rs
+
 Ajouter un theme solar punk
 
 V2.3
