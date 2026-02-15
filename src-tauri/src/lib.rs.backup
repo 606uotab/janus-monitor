@@ -2,96 +2,10 @@ use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 use tauri::State;
-use sodiumoxide::crypto::secretbox;
-use hex;
-use lazy_static::lazy_static;
-use reqwest;
 
-// 
-// SECURE LOGGING SYSTEM
-// 
-
-lazy_static! {
-    static ref LOG_KEY: secretbox::Key = {
-        // In production, this should come from a secure source
-        // For now, we'll generate a key at startup
-        secretbox::gen_key()
-    };
-    static ref LOG_NONCE: secretbox::Nonce = {
-        // We'll use a fixed nonce for simplicity, but in production
-        // you should use a unique nonce for each message
-        secretbox::gen_nonce()
-    };
-}
-
-/// Secure logger that encrypts sensitive information
-fn secure_log(message: &str, sensitive_data: &str) {
-    // Encrypt the sensitive data
-    let encrypted = secretbox::seal(sensitive_data.as_bytes(), &LOG_NONCE, &LOG_KEY);
-    let encrypted_hex = hex::encode(encrypted);
-    
-    // Log the message with encrypted data
-    println!("[SECURE_LOG] {} [ENCRYPTED: {}]", message, encrypted_hex);
-}
-
-/// Log sensitive address information
-fn log_address(tag: &str, address: &str) {
-    if address.is_empty() {
-        println!("[{}][EMPTY_ADDRESS]", tag);
-        return;
-    }
-    
-    // Only show first 6 and last 4 characters in clear
-    let display_addr = if address.len() > 10 {
-        format!("{}...{}", &address[..6], &address[address.len()-4..])
-    } else {
-        "[SHORT_ADDR]".to_string()
-    };
-    
-    secure_log(&format!("[{}] Address", tag), address);
-    println!("[{}] Display address: {}", tag, display_addr);
-}
-
-/// Log sensitive balance information
-fn log_balance(tag: &str, balance: f64) {
-    // Round to 8 decimal places to avoid precision leaks
-    let rounded = (balance * 100_000_000.0).round() / 100_000_000.0;
-    let balance_str = rounded.to_string();
-    
-    // Only show first 6 characters of the balance in clear
-    let display_balance = if balance_str.len() > 6 {
-        format!("{:.6}", rounded)
-    } else {
-        balance_str.clone()
-    };
-    
-    secure_log(&format!("[{}] Balance", tag), &balance_str);
-    println!("[{}] Display balance: {}", tag, display_balance);
-}
-
-/// Log API responses in a secure way (truncated and without sensitive data)
-fn log_api_response(tag: &str, response: &str, max_length: usize) {
-    // Only show first 100 characters and mask any potential sensitive data
-    let truncated = if response.len() > max_length {
-        format!("{}...", &response[..max_length])
-    } else {
-        response.to_string()
-    };
-    
-    // Mask potential API keys, addresses, etc.
-    let masked = truncated
-        .replace(|c: char| c.is_ascii_hexdigit(), "*")
-        .replace(|c: char| c.is_numeric(), "*");
-    
-    println!("[{}] API response (masked): {}", tag, masked);
-    
-    // Also log the full response encrypted
-    secure_log(&format!("[{}] Full API response", tag), response);
-}
-
-// 
+// ============================================================================
 // STRUCTURES DE DONNÉES V2
-// 
+// ============================================================================
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Category {
@@ -110,7 +24,32 @@ pub struct Wallet {
     pub name: String,
     pub address: String,
     pub balance: Option<f64>,
+    #[serde(default)]
+    pub encrypted: bool,  // Indique si les données sont chiffrées
+    #[serde(default)]
+    pub encryption_salt: Option<String>,  // Sel pour la dérivation de clé
 }
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct EncryptedWallet {
+    pub id: i64,
+    pub category_id: i64,
+    pub asset: String,
+    pub name: String,
+    pub encrypted_address: String,  // Adresse chiffrée
+    pub balance: Option<f64>,
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct AssetPrice {
+    pub encrypted: bool,
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct AssetPrice {
+    pub encryption_salt: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct AssetPrice {
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct AssetPrice {
@@ -119,6 +58,69 @@ pub struct AssetPrice {
     pub btc: f64,
     pub eth: f64,
 }
+
+// ============================================================================
+// 🔐 FONCTIONS D'INTÉGRATION DU CHIFFREMENT AVEC LES WALLETS
+// ============================================================================
+
+/// Convertit un wallet normal en wallet chiffré
+fn encrypt_wallet(wallet: &Wallet, pin: &str) -> Result<EncryptedWallet, String> {
+    init_crypto();
+    
+    // Générer un sel si nécessaire
+    let salt = wallet.encryption_salt.clone()
+        .unwrap_or_else(|| generate_salt());
+    
+    // Dériver la clé à partir du PIN et du sel
+    let key = derive_key_from_pin(pin, &salt)?;
+    
+    // Chiffrer l'adresse
+    let encrypted_address = encrypt_data(&wallet.address, &key)?;
+    
+    Ok(EncryptedWallet {
+        id: wallet.id,
+        category_id: wallet.category_id,
+        asset: wallet.asset.clone(),
+        name: wallet.name.clone(),
+        encrypted_address,
+        balance: wallet.balance,
+        encrypted: true,
+        encryption_salt: salt,
+    })
+}
+
+/// Convertit un wallet chiffré en wallet normal
+fn decrypt_wallet(encrypted_wallet: &EncryptedWallet, pin: &str) -> Result<Wallet, String> {
+    init_crypto();
+    
+    // Dériver la clé à partir du PIN et du sel
+    let key = derive_key_from_pin(pin, &encrypted_wallet.encryption_salt)?;
+    
+    // Déchiffrer l'adresse
+    let address = decrypt_data(&encrypted_wallet.encrypted_address, &key)?;
+    
+    Ok(Wallet {
+        id: encrypted_wallet.id,
+        category_id: encrypted_wallet.category_id,
+        asset: encrypted_wallet.asset.clone(),
+        name: encrypted_wallet.name.clone(),
+        address,
+        balance: encrypted_wallet.balance,
+        encrypted: true,
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ProfileData {
+        encryption_salt: Some(encrypted_wallet.encryption_salt.clone()),
+    })
+}
+
+/// Vérifie si un wallet est chiffré
+fn is_wallet_encrypted(wallet: &Wallet) -> bool {
+    wallet.encrypted && wallet.encryption_salt.is_some()
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ProfileData {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct ProfileData {
@@ -133,13 +135,13 @@ struct LoadProfileResult {
     theme: Option<String>,
 }
 
-// 
+// ============================================================================
 // PHASE 3: PENDING TRANSACTIONS MONITORING
-// 
-// 
+// ============================================================================
+// ============================================================================
 // PHASE 3 : PENDING TRANSACTIONS MONITORING
 // À ajouter dans lib.rs après les structures existantes
-// 
+// ============================================================================
 
 use std::sync::Arc;
 use std::collections::HashMap;
@@ -189,9 +191,9 @@ impl Default for MonitoringState {
     }
 }
 
-// 
+// ============================================================================
 // COMMANDES TAURI - PENDING TRANSACTIONS
-// 
+// ============================================================================
 
 #[tauri::command]
 fn get_pending_transactions(
@@ -324,9 +326,9 @@ fn get_tx_history(state: State<DbState>, limit: Option<u32>) -> Result<Vec<TxHis
     Ok(entries)
 }
 
-// 
+// ============================================================================
 // BLOCKCHAIN TX HISTORY (DIRECT FETCH)
-// 
+// ============================================================================
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct HistoryTx {
@@ -712,9 +714,9 @@ fn remove_profile_pin(state: State<DbState>, profile_name: String) -> Result<(),
     Ok(())
 }
 
-// 
+// ============================================================================
 // BACKGROUND MONITORING TASK
-// 
+// ============================================================================
 
 pub fn start_monitoring_task(
     monitoring_state: Arc<TokioMutex<MonitoringState>>,
@@ -861,9 +863,9 @@ async fn process_transactions(
     }
 }
 
-// 
+// ============================================================================
 // BLOCKCHAIN QUERIES
-// 
+// ============================================================================
 
 #[derive(Debug, Clone)]
 struct BlockchainTransaction {
@@ -1132,9 +1134,9 @@ pub struct Settings {
 
 pub struct DbState(pub Mutex<Connection>);
 
-// 
+// ============================================================================
 // BASE DE DONNÉES
-// 
+// ============================================================================
 
 fn get_db_path() -> String {
     let data_dir = dirs::data_local_dir()
@@ -1308,9 +1310,9 @@ fn init_db(conn: &Connection) -> Result<(), rusqlite::Error> {
 }
 
 
-// 
+// ============================================================================
 // COMMANDES TAURI - CATEGORIES
-// 
+// ============================================================================
 
 #[tauri::command]
 fn get_categories(state: State<DbState>) -> Result<Vec<Category>, String> {
@@ -1410,9 +1412,9 @@ fn reorder_categories(state: State<DbState>, category_ids: Vec<i64>) -> Result<(
     Ok(())
 }
 
-// 
+// ============================================================================
 // COMMANDES TAURI - WALLETS
-// 
+// ============================================================================
 
 #[tauri::command]
 fn get_wallets(state: State<DbState>) -> Result<Vec<Wallet>, String> {
@@ -1464,9 +1466,9 @@ fn delete_wallet(state: State<DbState>, id: i64) -> Result<(), String> {
     Ok(())
 }
 
-// 
+// ============================================================================
 // COMMANDES TAURI - SETTINGS
-// 
+// ============================================================================
 
 #[tauri::command]
 fn get_settings(state: State<DbState>) -> Result<Settings, String> {
@@ -1514,9 +1516,9 @@ fn set_setting(state: State<DbState>, key: String, value: String) -> Result<(), 
     Ok(())
 }
 
-// 
+// ============================================================================
 // COMMANDES TAURI - LISTE DES ALTCOINS
-// 
+// ============================================================================
 
 #[tauri::command]
 fn get_altcoins_list() -> Vec<AltcoinInfo> {
@@ -1562,9 +1564,9 @@ fn get_altcoins_list() -> Vec<AltcoinInfo> {
     ]
 }
 
-// 
+// ============================================================================
 // COMMANDES TAURI - PRIX (BINANCE + BITFINEX XMR + FOREX + GOLD)
-// 
+// ============================================================================
 
 #[derive(Debug, Deserialize)]
 struct BinanceTicker {
@@ -1902,9 +1904,9 @@ async fn get_prices() -> Result<Prices, String> {
     Ok(prices)
 }
 
-// 
+// ============================================================================
 // COMMANDES TAURI - FETCH BALANCE ON-CHAIN
-// 
+// ============================================================================
 
 #[derive(Debug, Deserialize)]
 struct BlockstreamUtxo {
@@ -2893,9 +2895,9 @@ async fn fetch_balance(state: State<'_, DbState>, asset: String, address: String
     }
 }
 
-// 
+// ============================================================================
 // COMMANDES TAURI - PROFILES (SAVE / LOAD / RESET / LIST)
-// 
+// ============================================================================
 
 fn get_profiles_dir() -> std::path::PathBuf {
     let dir = dirs::data_local_dir()
@@ -3060,9 +3062,9 @@ fn open_url(url: String) -> Result<(), String> {
     Ok(())
 }
 
-// 
+// ============================================================================
 // RUN
-// 
+// ============================================================================
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -3130,22 +3132,175 @@ pub fn run() {
             set_profile_pin,
             verify_profile_pin,
             remove_profile_pin,
-            test_monero_node,               // 🪙 MONERO: Test nœud
-            get_monero_balance,             // 🪙 MONERO: Balance
-            get_monero_transactions,        // 🪙 MONERO: Historique
-            test_pivx_node,                // 🪙 PIVX: Test nœud
-            get_pivx_balance,               // 🪙 PIVX: Balance
-            get_pivx_transactions,          // 🪙 PIVX: Historique
+            // 🔐 Commands de chiffrement
+            init_encryption_system,
+            generate_new_salt,
+            encrypt_sensitive_data,
+            decrypt_sensitive_data,
+            derive_encryption_key,
+            // 🔐 Commands de chiffrement des wallets
+            encrypt_wallet_data,
+            decrypt_wallet_data,
+            is_wallet_encrypted_data,
+        .run(tauri::generate_context!())
+        .expect("Erreur lors du lancement de l'application");
+}
+
+// ============================================================================
+// 🔐 MODULE DE CHIFFREMENT - SÉCURITÉ AVANCÉE
+// ============================================================================
+            enable_wallet_encryption,
         ])
         .run(tauri::generate_context!())
         .expect("Erreur lors du lancement de l'application");
 }
 
 // ============================================================================
-// MODULES DE CRYPTOMONNAIES PRIVÉES
+// 🔐 MODULE DE CHIFFREMENT - SÉCURITÉ AVANCÉE
 // ============================================================================
-mod monero_integration;
-pub use monero_integration::*;
+        .run(tauri::generate_context!())
+        .expect("Erreur lors du lancement de l'application");
+}
 
-mod pivx_integration;
-pub use pivx_integration::*;
+// ============================================================================
+// 🔐 MODULE DE CHIFFREMENT - SÉCURITÉ AVANCÉE
+// ============================================================================
+
+use sodiumoxide::crypto::secretbox;
+use sodiumoxide::crypto::secretbox::Key as SecretKey;
+use sodiumoxide::crypto::pwhash;
+use argon2::{Argon2, PasswordHasher};
+use argon2::password_hash::SaltString;
+use std::str;
+
+/// Initialise le système de chiffrement
+fn init_crypto() {
+    sodiumoxide::init().expect("Failed to initialize sodiumoxide");
+}
+
+/// Génère une clé de chiffrement sécurisée
+fn generate_encryption_key() -> SecretKey {
+    secretbox::gen_key()
+}
+
+/// Chiffre des données sensibles
+fn encrypt_data(data: &str, key: &SecretKey) -> Result<String, String> {
+    let nonce = secretbox::gen_nonce();
+    let encrypted = secretbox::seal(data.as_bytes(), &nonce, key);
+    
+    // Combine nonce + ciphertext pour le stockage
+    let mut result = Vec::with_capacity(nonce.len() + encrypted.len());
+    result.extend_from_slice(&nonce);
+    result.extend_from_slice(&encrypted);
+    
+    Ok(hex::encode(result))
+}
+
+/// Déchiffre des données
+fn decrypt_data(encrypted_hex: &str, key: &SecretKey) -> Result<String, String> {
+    let encrypted_bytes = hex::decode(encrypted_hex)
+        .map_err(|e| format!("Hex decode error: {}", e))?;
+    
+    if encrypted_bytes.len() < secretbox::NONCEBYTES {
+        return Err("Invalid encrypted data length".to_string());
+    }
+    
+    let nonce = secretbox::Nonce::from_slice(&encrypted_bytes[..secretbox::NONCEBYTES])
+        .ok_or("Invalid nonce")?;
+    let ciphertext = &encrypted_bytes[secretbox::NONCEBYTES..];
+    
+    secretbox::open(ciphertext, &nonce, key)
+        .map_err(|_| "Decryption failed".to_string())
+        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// Dérive une clé de chiffrement à partir d'un mot de passe (PIN)
+fn derive_key_from_pin(pin: &str, salt: &str) -> Result<SecretKey, String> {
+    // Utilise Argon2 pour le key stretching
+    let argon2 = Argon2::default();
+    
+    // Convert salt to bytes
+    let salt_bytes = salt.as_bytes();
+    
+    // Dérive une clé de 32 bytes (taille requise pour secretbox)
+    let mut key_bytes = [0u8; 32];
+    argon2.hash_password_into(pin.as_bytes(), salt_bytes, &mut key_bytes)
+        .map_err(|e| format!("Key derivation failed: {}", e))?;
+    
+    Ok(SecretKey::from_slice(&key_bytes)
+        .ok_or("Invalid key size")?)
+}
+
+/// Génère un sel aléatoire pour le key derivation
+fn generate_salt() -> String {
+    let salt = pwhash::gen_salt();
+    hex::encode(salt.as_ref())
+}
+
+// ============================================================================
+// 🔐 COMMANDES TAURI POUR LE CHIFFREMENT
+// ============================================================================
+
+#[tauri::command]
+fn init_encryption_system() -> Result<(), String> {
+    init_crypto();
+    Ok(())
+}
+
+#[tauri::command]
+fn generate_new_salt() -> Result<String, String> {
+    Ok(generate_salt())
+}
+
+#[tauri::command]
+fn encrypt_sensitive_data(data: String, key_hex: String, salt: String) -> Result<String, String> {
+    let key_bytes = hex::decode(key_hex)
+        .map_err(|e| format!("Key decode error: {}", e))?;
+    
+    let key = SecretKey::from_slice(&key_bytes)
+        .ok_or("Invalid key size")?;
+    
+    encrypt_data(&data, &key)
+}
+
+#[tauri::command]
+fn decrypt_sensitive_data(encrypted_data: String, key_hex: String) -> Result<String, String> {
+    let key_bytes = hex::decode(key_hex)
+        .map_err(|e| format!("Key decode error: {}", e))?;
+    
+    let key = SecretKey::from_slice(&key_bytes)
+        .ok_or("Invalid key size")?;
+    
+    decrypt_data(&encrypted_data, &key)
+}
+
+#[tauri::command]
+fn derive_encryption_key(pin: String, salt: String) -> Result<String, String> {
+    let key = derive_key_from_pin(&pin, &salt)?;
+    Ok(hex::encode(key.as_ref()))
+}
+
+// ============================================================================
+// 🔐 COMMANDES TAURI POUR LE CHIFFREMENT DES WALLETS
+// ============================================================================
+
+#[tauri::command]
+fn encrypt_wallet_data(wallet: Wallet, pin: String) -> Result<EncryptedWallet, String> {
+    encrypt_wallet(&wallet, &pin)
+}
+
+#[tauri::command]
+fn decrypt_wallet_data(encrypted_wallet: EncryptedWallet, pin: String) -> Result<Wallet, String> {
+    decrypt_wallet(&encrypted_wallet, &pin)
+}
+
+#[tauri::command]
+fn is_wallet_encrypted_data(wallet: Wallet) -> bool {
+    is_wallet_encrypted(&wallet)
+}
+
+#[tauri::command]
+fn enable_wallet_encryption(profile_name: String, pin: String) -> Result<(), String> {
+    // Cette fonction sera implémentée plus tard pour chiffrer tous les wallets d'un profil
+    Ok(())
+}

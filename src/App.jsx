@@ -1,6 +1,24 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { QRCodeSVG } from 'qrcode.react';
+import {
+  secureGetPrices,
+  secureFetchBalance,
+  validateBackendResponse
+} from './secureBackend.js';
+import {
+  validateAddress,
+  preparePivxWalletData,
+  getBalance,
+  getPrivacyBalance,
+  getPrivacyTransactions,
+  testPrivacyNode,
+  maskSensitiveData,
+  getPrivacyCoinConfig,
+  getMoneroDefaultNodes,
+  COIN_FAMILIES,
+  getFamilyFunctions
+} from './integrations';
 import PendingTransactionsPanel from './PendingTransactionsPanel';
 import TokenSearch from './TokenSearch';
 import { NoctaliMoon, NoctaliImages, NoctaliStarfield, LunarPunkMoon, LunarPunkDunes, LunarPunkDust } from './themes';
@@ -131,6 +149,13 @@ const App = () => {
   const [showMenuDrawer, setShowMenuDrawer] = useState(false);
   const [menuView, setMenuView] = useState('main'); // 'main' | 'profiles' | 'settings' | 'security'
   const [showWhitepaper, setShowWhitepaper] = useState(false);
+  
+  // États pour la gestion des wallets Monero
+  const [moneroWalletData, setMoneroWalletData] = useState({});
+  const [showMoneroSetup, setShowMoneroSetup] = useState(false);
+  const [currentMoneroWallet, setCurrentMoneroWallet] = useState(null);
+  const [moneroTestResult, setMoneroTestResult] = useState(null);
+  const [moneroNodeStatus, setMoneroNodeStatus] = useState({});
 
   // ── PIN / Lock ──
   const [isLocked, setIsLocked] = useState(false);
@@ -139,6 +164,8 @@ const App = () => {
   const [profileSecurity, setProfileSecurity] = useState({ has_pin: false, inactivity_minutes: 0 });
   const inactivityTimerRef = useRef(null);
   const [etherscanApiKey, setEtherscanApiKey] = useState('');
+  const [encryptedApiKey, setEncryptedApiKey] = useState(null);
+  const [apiKeySalt, setApiKeySalt] = useState(null);
   const [theme, setTheme] = useState('dark');
   const [expandedAssets, setExpandedAssets] = useState({});
   const [showForex, setShowForex] = useState(false);
@@ -195,6 +222,193 @@ const App = () => {
   const maskAddress = (addr) => !addr ? '' : addr.length <= 10 ? addr : addr.substring(0, 6) + '••••••••';
   const formatNum = (n, dec = 2) => (n === null || n === undefined || isNaN(n)) ? '–' : n.toLocaleString('fr-FR', { minimumFractionDigits: dec, maximumFractionDigits: dec });
   const maskBalance = (value, decimals = 2) => hideBalances ? '*****' : formatNum(value, decimals);
+  
+  // Helper to check if a wallet has encrypted data
+  const isWalletEncrypted = (wallet) => {
+    return wallet.encrypted && wallet.encryption_salt && 
+           (wallet.encrypted_name || wallet.encrypted_balance);
+  };
+  
+  // Helper to get display name for potentially encrypted wallet
+  const getWalletDisplayName = (wallet) => {
+    if (isWalletEncrypted(wallet)) {
+      return wallet.name === '[ENCRYPTED]' ? '🔒 Wallet Chiffré' : wallet.name;
+    }
+    return wallet.name;
+  };
+  
+  // Helper to get display balance for potentially encrypted wallet
+  const getWalletDisplayBalance = (wallet) => {
+    if (isWalletEncrypted(wallet) && wallet.balance === null) {
+      return '🔒 Chiffré';
+    }
+    return wallet.balance;
+  };
+
+  // Helper to check if wallet is Monero and has extended keys
+  const isMoneroWalletWithKeys = (wallet) => {
+    return wallet.asset === 'xmr' && wallet.viewKey && wallet.viewKey !== '[NOT_SET]';
+  };
+
+  // Helper to get Monero wallet display info
+  const getMoneroWalletInfo = (wallet) => {
+    if (!isMoneroWalletWithKeys(wallet)) return null;
+    
+    return {
+      hasKeys: true,
+      address: wallet.address,
+      viewKey: wallet.viewKey,
+      spendKey: wallet.spendKey || null,
+      node: wallet.moneroNode || getMoneroDefaultNodes()[0],
+      maskedViewKey: maskSensitiveData('XMR', wallet.viewKey),
+      maskedSpendKey: wallet.spendKey ? maskSensitiveData('XMR', wallet.spendKey) : null
+    };
+  };
+
+  // Open Monero setup for a specific wallet
+  const openMoneroSetup = (wallet) => {
+    setCurrentMoneroWallet(wallet);
+    setShowMoneroSetup(true);
+    
+    // Test the default node
+    testPrivacyNode('XMR', getMoneroDefaultNodes()[0]).then(result => {
+      setMoneroNodeStatus(prev => ({ ...prev, [getMoneroDefaultNodes()[0]]: result }));
+    });
+  };
+
+  // Close Monero setup
+  const closeMoneroSetup = () => {
+    setShowMoneroSetup(false);
+    setCurrentMoneroWallet(null);
+    setMoneroTestResult(null);
+  };
+
+  // Save Monero wallet configuration
+  const saveMoneroConfiguration = async (wallet, viewKey, spendKey, node) => {
+    try {
+      // Validate keys
+      validatePivxKeys(wallet.address, null, null, node);
+
+      // Prepare wallet data
+      const walletData = preparePivxWalletData(wallet.address, { node });
+      
+      // Store in state
+      setMoneroWalletData(prev => ({ ...prev, [wallet.id]: walletData }));
+      
+      // Update wallet in database
+      await invoke('update_wallet', {
+        id: wallet.id,
+        name: wallet.name,
+        address: wallet.address,
+        balance: wallet.balance,
+        monero_view_key: viewKey,
+        monero_spend_key: spendKey || null,
+        monero_node: node
+      });
+      
+      // Test the configuration
+      const testResult = await testMoneroNode(node);
+      setMoneroNodeStatus(prev => ({ ...prev, [node]: testResult }));
+      
+      showToast('✅ Configuration Monero enregistrée avec succès !');
+      
+      // Reload wallets to get updated data
+      await loadWallets();
+      
+      return true;
+    } catch (error) {
+      showToast(`❌ Erreur: ${error.message}`);
+      console.error('Erreur sauvegarde Monero:', error);
+      return false;
+    }
+  };
+
+  // Fetch Monero balance for a wallet
+  const fetchMoneroBalance = async (wallet) => {
+    try {
+      if (!isMoneroWalletWithKeys(wallet)) {
+        showToast('⚠️ Clés Monero requises pour récupérer la balance');
+        return null;
+      }
+      
+      const moneroInfo = getMoneroWalletInfo(wallet);
+      const walletData = prepareMoneroWalletData(
+        wallet.address,
+        moneroInfo.viewKey,
+        moneroInfo.spendKey,
+        moneroInfo.node
+      );
+      
+      setLoading(prev => ({ ...prev, [wallet.id]: true }));
+      
+      const result = await getPrivacyBalance('XMR', walletData.address, {
+        viewKey: walletData.viewKey,
+        node: walletData.node
+      });
+      
+      if (result.success) {
+        // Update wallet balance
+        await invoke('update_wallet', {
+          id: wallet.id,
+          name: wallet.name,
+          address: wallet.address,
+          balance: result.balance
+        });
+        
+        await loadWallets();
+        showToast(`🔄 Balance Monero mise à jour: ${result.balance.toFixed(6)} XMR`);
+        return result;
+      }
+      
+      return null;
+    } catch (error) {
+      showToast(`❌ Erreur Monero: ${error.message}`);
+      console.error('Erreur balance Monero:', error);
+      return null;
+    } finally {
+      setLoading(prev => ({ ...prev, [wallet.id]: false }));
+    }
+  };
+
+  // Test Monero configuration
+  const testMoneroConfiguration = async (address, viewKey, spendKey, node) => {
+    try {
+      setMoneroTestResult({ testing: true, error: null });
+      
+      const walletData = prepareMoneroWalletData(address, viewKey, spendKey || null, node);
+      
+      // Test node first
+      const nodeTest = await testMoneroNode(node);
+      if (!nodeTest.success) {
+        throw new Error(`Nœud Monero inaccessible: ${nodeTest.error}`);
+      }
+      
+      // Test balance fetch (this will scan the blockchain)
+      const balanceResult = await getPrivacyBalance('XMR', walletData.address, {
+        viewKey: walletData.viewKey,
+        node: walletData.node
+      });
+      
+      setMoneroTestResult({
+        testing: false,
+        success: true,
+        balance: balanceResult.balance,
+        unlockedBalance: balanceResult.unlockedBalance,
+        nodeInfo: nodeTest
+      });
+      
+      showToast('✅ Configuration Monero validée avec succès !');
+      return true;
+    } catch (error) {
+      setMoneroTestResult({
+        testing: false,
+        success: false,
+        error: error.message
+      });
+      showToast(`❌ Test échoué: ${error.message}`);
+      return false;
+    }
+  };
 
   const showToast = (message, duration = 2000) => {
     setToast(message);
@@ -208,15 +422,377 @@ const App = () => {
     return Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
   };
 
+  // ── PIN Setup Overlay ──
+  const [showPinSetupOverlay, setShowPinSetupOverlay] = useState(false);
+  const [newPin, setNewPin] = useState('');
+  const [confirmPin, setConfirmPin] = useState('');
+  const [pinSetupError, setPinSetupError] = useState('');
+
+  const openPinSetupOverlay = () => {
+    setNewPin('');
+    setConfirmPin('');
+    setPinSetupError('');
+    setShowPinSetupOverlay(true);
+  };
+
+  const closePinSetupOverlay = () => {
+    setShowPinSetupOverlay(false);
+  };
+
+  const handlePinSetup = async () => {
+    if (!newPin || !confirmPin) {
+      setPinSetupError('Veuillez remplir tous les champs');
+      return;
+    }
+    
+    if (newPin.length < 4) {
+      setPinSetupError('Le PIN doit contenir au moins 4 caractères');
+      return;
+    }
+    
+    if (newPin !== confirmPin) {
+      setPinSetupError('Les PIN ne correspondent pas');
+      return;
+    }
+    
+    try {
+      setPinSetupError('');
+      const h = await hashPin(newPin);
+      await invoke('set_profile_pin', { 
+        profileName: activeProfile, 
+        pinHash: h, 
+        inactivityMinutes: 5 
+      });
+      
+      // Mettre à jour l'état local
+      setProfileSecurity({ has_pin: true, inactivity_minutes: 5 });
+      
+      // Forcer le rechargement de la sécurité
+      await loadProfileSecurity(activeProfile);
+      
+      closePinSetupOverlay();
+      showToast('🔒 Code de sécurité enregistré avec succès ! Le chiffrement est maintenant disponible.');
+      
+      // Générer automatiquement un sel pour faciliter le processus
+      await generateNewSalt();
+      
+      // Ne pas verrouiller la session - juste laisser l'utilisateur continuer
+      // La session reste déverrouillée pour permettre l'utilisation immédiate du chiffrement
+      
+    } catch (error) {
+      setPinSetupError(`Échec de l'activation: ${error}`);
+      console.error('Erreur activation PIN:', error);
+    }
+  };
+
+  // ── Encryption utilities ──
+  const [encryptionEnabled, setEncryptionEnabled] = useState(false);
+  const [encryptionSalt, setEncryptionSalt] = useState('');
+  const [testEncryptionResult, setTestEncryptionResult] = useState(null);
+
+  const initEncryptionSystem = async () => {
+    try {
+      await invoke('init_encryption_system');
+      showToast('Système de chiffrement initialisé');
+    } catch (error) {
+      showToast(`Erreur d'initialisation: ${error}`);
+    }
+  };
+
+  const generateNewSalt = async () => {
+    try {
+      const salt = await invoke('generate_new_salt');
+      setEncryptionSalt(salt);
+      showToast('Nouveau sel généré');
+      return salt;
+    } catch (error) {
+      showToast(`Erreur de génération de sel: ${error}`);
+      return null;
+    }
+  };
+
+  const testEncryption = async (testData = null) => {
+    try {
+      if (!encryptionSalt) {
+        await generateNewSalt();
+      }
+      
+      // Utiliser une vraie adresse si disponible, sinon utiliser une adresse de test
+      const dataToTest = testData || (wallets.length > 0 
+        ? wallets[0].address 
+        : 'bc1qtestaddress1234567890');
+
+      if (!dataToTest) {
+        showToast('⚠️ Aucun wallet disponible pour le test');
+        return false;
+      }
+
+      // Derive key from PIN
+      let pinToUse = 'defaultpin';
+      if (profileSecurity.has_pin) {
+        // Si la session est déjà déverrouillée (PIN déjà validé), utiliser le PIN actuel
+        // Sinon, demander à l'utilisateur d'entrer son PIN
+        if (!isLocked && pinInput && pinInput.length > 0) {
+          // Session déjà déverrouillée, utiliser le PIN en mémoire
+          pinToUse = pinInput;
+        } else if (!isLocked) {
+          // Session déverrouillée mais pas de PIN en mémoire - ne devrait pas arriver
+          pinToUse = 'defaultpin';
+        } else {
+          // Session verrouillée - demander le PIN
+          showToast('⚠️ Déverrouillez d\'abord la session pour tester le chiffrement');
+          return false;
+        }
+      }
+      
+      const keyHex = await invoke('derive_encryption_key', {
+        pin: pinToUse,
+        salt: encryptionSalt
+      });
+      
+      // Encrypt the data
+      const encrypted = await invoke('encrypt_sensitive_data', {
+        data: dataToTest,
+        keyHex: keyHex,
+        salt: encryptionSalt
+      });
+      
+      // Decrypt to verify
+      const decrypted = await invoke('decrypt_sensitive_data', {
+        encryptedData: encrypted,
+        keyHex: keyHex
+      });
+      
+      // Vérifier que le déchiffrement a fonctionné
+      const success = decrypted === dataToTest;
+
+      setTestEncryptionResult({
+        original: dataToTest,
+        encrypted,
+        decrypted,
+        success,
+        timestamp: new Date().toISOString(),
+        walletName: wallets.length > 0 ? wallets[0].name : 'Test'
+      });
+
+      if (success) {
+        showToast('✅ Chiffrement fonctionnel ! Vous pouvez maintenant sécuriser vos wallets.');
+
+        // Proposer d'activer le chiffrement pour tous les wallets ou de tester le chiffrement amélioré
+        setTimeout(() => {
+          const choice = window.confirm('Souhaitez-vous tester le chiffrement amélioré (nom + solde) ou activer le chiffrement de base ?');
+          if (choice) {
+            testEnhancedEncryption();
+          } else {
+            const shouldActivate = window.confirm('Souhaitez-vous activer le chiffrement pour tous vos wallets ?');
+            if (shouldActivate) {
+              activateEncryptionForAllWallets(pinToUse);
+            }
+          }
+        }, 1000);
+      } else {
+        showToast('❌ Échec du chiffrement : données corrompues');
+      }
+
+      return success;
+
+    } catch (error) {
+      showToast(`❌ Erreur de chiffrement: ${error}`);
+      setTestEncryptionResult({ error: error.toString() });
+      return false;
+    }
+  };
+
+  const activateEncryptionForAllWallets = async (pin) => {
+    try {
+      if (!pin || pin.length === 0) {
+        showToast('⚠️ Veuillez entrer votre PIN');
+        return;
+      }
+
+      showToast('🔐 Activation du chiffrement pour tous les wallets...');
+
+      // Chiffrer chaque wallet
+      const encryptedWallets = [];
+      for (const wallet of wallets) {
+        try {
+          const encryptedWallet = await invoke('encrypt_wallet_data', {
+            wallet,
+            pin
+          });
+          encryptedWallets.push(encryptedWallet);
+
+          // Mettre à jour l'interface
+          setWallets(prev => prev.map(w =>
+            w.id === wallet.id ? { 
+              ...w, 
+              encrypted: true,
+              name: '[ENCRYPTED]',
+              balance: null,
+              address: encryptedWallet.address,
+              encryption_salt: encryptedWallet.encryption_salt,
+              encrypted_name: encryptedWallet.encrypted_name,
+              encrypted_balance: encryptedWallet.encrypted_balance
+            } : w
+          ));
+
+        } catch (error) {
+          console.error(`Échec du chiffrement du wallet ${wallet.id}:`, error);
+          showToast(`⚠️ Échec du chiffrement pour ${wallet.name}`);
+        }
+      }
+
+      if (encryptedWallets.length > 0) {
+        showToast(`🔒 ${encryptedWallets.length} wallet(s) chiffré(s) avec succès !`);
+        // Sauvegarder les changements
+        try {
+          await invoke('save_profile', { name: activeProfile, theme });
+        } catch (e) {
+          console.error('Erreur sauvegarde:', e);
+        }
+      }
+
+    } catch (error) {
+      showToast(`❌ Erreur lors de l'activation globale: ${error}`);
+      console.error('Erreur activation globale:', error);
+    }
+  };
+  
+  // Encrypt the current API key
+  const encryptCurrentApiKey = async () => {
+    try {
+      if (!etherscanApiKey) {
+        showToast('⚠️ Aucune clé API à chiffrer');
+        return;
+      }
+      
+      if (!profileSecurity.has_pin) {
+        showToast('⚠️ Veuillez d\'abord configurer un PIN de sécurité');
+        return;
+      }
+      
+      const pin = prompt('Entrez votre PIN pour chiffrer la clé API:');
+      if (!pin) {
+        showToast('❌ Opération annulée');
+        return;
+      }
+      
+      showToast('🔐 Chiffrement de la clé API...');
+      
+      const encryptedSettings = await invoke('encrypt_api_key_with_pin', {
+        api_key: etherscanApiKey,
+        pin: pin
+      });
+      
+      // Update our state
+      setEncryptedApiKey(encryptedSettings.encrypted_api_key);
+      setApiKeySalt(encryptedSettings.api_key_salt);
+      setEtherscanApiKey(''); // Clear the plaintext key
+      
+      // Save the encrypted settings
+      await saveSettings();
+      
+      showToast('🔒 Clé API chiffrée avec succès !');
+      
+    } catch (error) {
+      showToast(`❌ Échec du chiffrement: ${error}`);
+      console.error('Erreur chiffrement clé API:', error);
+    }
+  };
+  
+  // Decrypt the API key for temporary use
+  const decryptApiKeyTemporarily = async () => {
+    try {
+      if (!isApiKeyEncrypted()) {
+        showToast('⚠️ La clé API n\'est pas chiffrée');
+        return;
+      }
+      
+      const pin = prompt('Entrez votre PIN pour déchiffrer temporairement la clé API:');
+      if (!pin) {
+        showToast('❌ Opération annulée');
+        return;
+      }
+      
+      showToast('🔓 Déchiffrement de la clé API...');
+      
+      const decryptedKey = await invoke('decrypt_api_key_with_pin', {
+        encrypted_key: encryptedApiKey,
+        salt: apiKeySalt,
+        pin: pin
+      });
+      
+      // Show the key temporarily (for copying)
+      const shouldShow = window.confirm('La clé API a été déchiffrée. Voulez-vous la voir temporairement ?');
+      if (shouldShow) {
+        alert(`Clé API déchiffrée:\n\n${decryptedKey}\n\n(Cette clé sera visible jusqu'à ce que vous quittiez cette boîte de dialogue)`);
+      }
+      
+      showToast('🔓 Clé API déchiffrée temporairement');
+      
+    } catch (error) {
+      showToast(`❌ Échec du déchiffrement: ${error}`);
+      console.error('Erreur déchiffrement clé API:', error);
+    }
+  };
+  
+  // Test the API key encryption system
+  const testApiKeyEncryption = async () => {
+    try {
+      const testPin = prompt('Entrez un PIN de test pour le chiffrement de clé API:');
+      if (!testPin || testPin.length < 4) {
+        showToast('❌ PIN trop court (minimum 4 caractères)');
+        return;
+      }
+      
+      const testApiKey = prompt('Entrez une clé API de test (ou laissez vide pour utiliser une clé par défaut):') || 'test_api_key_1234567890';
+      
+      showToast('🧪 Test du chiffrement de clé API...');
+      
+      const result = await invoke('test_api_key_encryption', { 
+        api_key: testApiKey, 
+        pin: testPin 
+      });
+      
+      showToast(`✅ Test clé API réussi: ${result.substring(0, 50)}...`);
+      console.log('Résultat complet du test clé API:', result);
+      
+    } catch (error) {
+      showToast(`❌ Échec du test clé API: ${error}`);
+      console.error('Erreur test chiffrement clé API:', error);
+    }
+  };
+  
+  // Test the enhanced encryption system
+  const testEnhancedEncryption = async () => {
+    try {
+      const testPin = prompt('Entrez un PIN de test pour le chiffrement amélioré:');
+      if (!testPin || testPin.length < 4) {
+        showToast('❌ PIN trop court (minimum 4 caractères)');
+        return;
+      }
+      
+      showToast('🧪 Test du chiffrement amélioré...');
+      
+      const result = await invoke('test_enhanced_encryption', { pin: testPin });
+      
+      showToast(`✅ Test réussi: ${result.substring(0, 50)}...`);
+      console.log('Résultat complet du test:', result);
+      
+    } catch (error) {
+      showToast(`❌ Échec du test: ${error}`);
+      console.error('Erreur test chiffrement:', error);
+    }
+  };
+
   const loadProfileSecurity = async (profileName) => {
     try {
       const sec = await invoke('get_profile_security', { profileName });
       setProfileSecurity(sec);
-      if (sec.has_pin) {
-        setIsLocked(true);
-        setPinInput('');
-        setPinError('');
-      }
+      // Ne pas verrouiller automatiquement la session
+      // L'utilisateur peut verrouiller manuellement si nécessaire
+      setPinInput('');
+      setPinError('');
     } catch(_) { setProfileSecurity({ has_pin: false, inactivity_minutes: 0 }); }
   };
 
@@ -282,7 +858,9 @@ const App = () => {
   };
   const loadPrices = useCallback(async () => {
     try {
-      const d = await invoke('get_prices');
+      // Utilisation de la fonction sécurisée pour récupérer les prix
+      const d = await secureGetPrices();
+
       setPrices(prev => {
         // Merge : garder les anciens prix si les nouveaux sont à 0 (API down)
         const merged = { ...prev };
@@ -298,17 +876,35 @@ const App = () => {
       setLastPriceUpdate(new Date());
       setApiStatus({ binance: d.btc?.usd > 0, forex: d.forex_jpy_per_usd > 0 });
     } catch (e) {
-      console.error(e);
+      console.error('Erreur lors du chargement des prix:', e);
       setApiStatus(prev => ({ binance: prev.binance === true ? true : false, forex: prev.forex === true ? true : false }));
+      showToast('❌ Erreur de chargement des prix. Vérifiez votre connexion.', 3000);
     }
   }, []);
   const loadAltcoinsList = useCallback(async () => { try { setAltcoinsList(await invoke('get_altcoins_list')); } catch (e) { console.error(e); } }, []);
   const loadSettings = useCallback(async () => {
-    try { const d = await invoke('get_settings'); setEtherscanApiKey(d.etherscan_api_key || ''); setTheme(d.theme || 'dark'); } catch (e) { console.error(e); }
+    try {
+      const d = await invoke('get_settings');
+      setEtherscanApiKey(d.etherscan_api_key || '');
+      setEncryptedApiKey(d.encrypted_api_key || null);
+      setApiKeySalt(d.api_key_salt || null);
+      setTheme(d.theme || 'dark');
+    } catch (e) { console.error(e); }
   }, []);
   const loadProfiles = useCallback(async () => { try { setProfiles(await invoke('list_profiles')); } catch (e) { console.error(e); } }, []);
   const saveSettings = async () => {
-    try { await invoke('save_settings', { settings: { etherscan_api_key: etherscanApiKey, theme } }); setMenuView('main'); showToast('Paramètres sauvegardés ✓'); } catch (e) { console.error(e); }
+    try {
+      await invoke('save_settings', {
+        settings: {
+          etherscan_api_key: etherscanApiKey,
+          encrypted_api_key: encryptedApiKey,
+          api_key_salt: apiKeySalt,
+          theme
+        }
+      });
+      setMenuView('main');
+      showToast('Paramètres sauvegardés ✓');
+    } catch (e) { console.error(e); }
   };
 
   // ── Profiles ──
@@ -332,7 +928,8 @@ const App = () => {
   };
   const handleLoadProfile = async (name) => {
     setShowMenuDrawer(false);
-    if (!await showConfirm(`Charger le profil "${name}" ?\nLe profil actuel sera sauvegardé.`)) return;
+    // Pas de confirmation nécessaire - charger directement le profil
+    // Le profil actuel est sauvegardé automatiquement avant le chargement
     try {
       // Always auto-save current state before loading another profile
       if (!isAnonymous) {
@@ -402,11 +999,29 @@ const App = () => {
       const cw = await invoke('get_wallets');
       for (const w of cw) {
         if (w.address && !manualOnlyAssets.includes(w.asset)) {
-          try { const b = await invoke('fetch_balance', { asset: w.asset, address: w.address }); if (b != null) await invoke('update_wallet', { id: w.id, name: w.name, address: w.address, balance: b }); } catch (e) { console.error(e); }
+          try {
+            // Utilisation de la fonction sécurisée pour récupérer la balance
+            const b = await secureFetchBalance(w.asset, w.address);
+            
+            if (b != null) {
+              await invoke('update_wallet', { 
+                id: w.id, 
+                name: w.name, 
+                address: w.address, 
+                balance: b 
+              });
+            }
+          } catch (e) {
+            console.error('Erreur lors de la récupération de la balance pour', w.asset, ':', e);
+            showToast(`⚠️ Erreur de balance pour ${w.asset.toUpperCase()}`, 2000);
+          }
         }
       }
       await loadWallets();
-    } catch (e) { console.error(e); }
+    } catch (e) {
+      console.error('Erreur lors du rafraîchissement:', e);
+      showToast('❌ Erreur lors du rafraîchissement des données', 3000);
+    }
     setRefreshing(false);
   };
 
@@ -888,7 +1503,11 @@ const App = () => {
   const WalletRow = ({ wallet }) => {
     const isLoading = loading[wallet.id];
     const cfg = allAssets[wallet.asset] || { symbol: wallet.asset.toUpperCase(), color: 'text-zinc-400', bg: 'bg-zinc-400/20' };
-    const valEur = (wallet.balance || 0) * (prices[wallet.asset]?.eur || 0);
+    
+    // Handle encrypted wallets
+    const displayName = getWalletDisplayName(wallet);
+    const displayBalance = getWalletDisplayBalance(wallet);
+    const valEur = (displayBalance || 0) * (prices[wallet.asset]?.eur || 0);
     const isCopied = copiedAddress === wallet.address;
 
     const handleQuickCopy = async (e) => {
@@ -903,18 +1522,19 @@ const App = () => {
           <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${cfg.bg} ${cfg.color} flex-shrink-0`}>{cfg.symbol}</span>
           <div className="min-w-0">
             <div className="text-sm font-medium flex items-center gap-2">
-              {wallet.name}
+              {displayName}
+              {isWalletEncrypted(wallet) && <span className="text-amber-500 text-xs" title="Wallet chiffré">🔒</span>}
               {isLoading && <span className="text-amber-500 text-xs animate-pulse">⟳</span>}
             </div>
             <div className={`font-mono text-xs ${T.textFaint} truncate`}>
-              {wallet.address ? maskAddress(wallet.address) : <span className={T.textFaint}>Aucune adresse</span>}
+              {wallet.address && wallet.address !== '[ENCRYPTED]' ? maskAddress(wallet.address) : <span className={T.textFaint}>Aucune adresse</span>}
             </div>
           </div>
         </div>
         <div className="flex items-center gap-1.5 flex-shrink-0">
           <div className="text-right cursor-pointer" onClick={() => startEdit(wallet)}>
-            <div className="font-medium tabular-nums">{wallet.balance != null ? maskBalance(wallet.balance, 8) : '–'}<span className={`${T.textMuted} text-sm ml-1`}>{cfg.symbol}</span></div>
-            <div className={`text-xs ${T.textFaint} tabular-nums`}>{maskBalance(valEur)} €</div>
+            <div className="font-medium tabular-nums">{displayBalance != null ? maskBalance(displayBalance, 8) : (isWalletEncrypted(wallet) ? '🔒 Chiffré' : '–')}<span className={`${T.textMuted} text-sm ml-1`}>{cfg.symbol}</span></div>
+            <div className={`text-xs ${T.textFaint} tabular-nums`}>{displayBalance != null ? maskBalance(valEur) : '–'} €</div>
           </div>
           <div className="flex items-center gap-0 opacity-0 group-hover:opacity-100 transition-all">
             {wallet.address && (
@@ -940,7 +1560,147 @@ const App = () => {
   };
 
   // Helper: render edit form (inline) or display row
-  const renderWalletItem = (w) => editMode === `edit-${w.id}` ? renderEditForm(w) : <WalletRow key={w.id} wallet={w} />;
+  const renderWalletItem = (w) => {
+    if (editMode === `edit-${w.id}`) {
+      return renderEditForm(w);
+    }
+    
+    // Use Monero-specific row for Monero wallets
+    if (w.asset === 'xmr') {
+      return <MoneroWalletRow key={w.id} wallet={w} />;
+    }
+    
+    // Use regular row for other assets
+    return <WalletRow key={w.id} wallet={w} />;
+  };
+  
+  // Helper to decrypt a wallet for display
+  const decryptWalletForDisplay = async (wallet) => {
+    if (!isWalletEncrypted(wallet)) {
+      return wallet;
+    }
+    
+    try {
+      const decrypted = await invoke('decrypt_wallet_data', {
+        encryptedWallet: wallet,
+        pin: pinInput
+      });
+      return decrypted;
+    } catch (error) {
+      console.error('Échec du déchiffrement:', error);
+      showToast('❌ Échec du déchiffrement du wallet', 3000);
+      return wallet;
+    }
+  };
+
+  // Monero-specific wallet row with extended key setup button
+  const MoneroWalletRow = ({ wallet }) => {
+    const isLoading = loading[wallet.id];
+    const cfg = allAssets[wallet.asset] || { symbol: wallet.asset.toUpperCase(), color: 'text-zinc-400', bg: 'bg-zinc-400/20' };
+    const moneroInfo = getMoneroWalletInfo(wallet);
+    
+    const displayName = getWalletDisplayName(wallet);
+    const displayBalance = getWalletDisplayBalance(wallet);
+    const valEur = (displayBalance || 0) * (prices[wallet.asset]?.eur || 0);
+    const isCopied = copiedAddress === wallet.address;
+
+    const handleQuickCopy = async (e) => {
+      e.stopPropagation();
+      if (!wallet.address) return;
+      try { await navigator.clipboard.writeText(wallet.address); setCopiedAddress(wallet.address); setTimeout(() => setCopiedAddress(null), 1500); } catch (err) { console.error(err); }
+    };
+
+    return (
+      <div className={`${T.rowBg} border ${T.rowBorder} rounded-lg px-3 py-2 flex items-center justify-between group`}>
+        <div className="flex items-center gap-3 cursor-pointer flex-1 min-w-0" onClick={() => startEdit(wallet)}>
+          <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${cfg.bg} ${cfg.color} flex-shrink-0`}>{cfg.symbol}</span>
+          <div className="min-w-0">
+            <div className="text-sm font-medium flex items-center gap-2">
+              {displayName}
+              {isWalletEncrypted(wallet) && <span className="text-amber-500 text-xs" title="Wallet chiffré">🔒</span>}
+              {isLoading && <span className="text-amber-500 text-xs animate-pulse">⟳</span>}
+              {moneroInfo && <span className="text-purple-400 text-xs" title="Clés Monero configurées">🔑</span>}
+            </div>
+            <div className={`font-mono text-xs ${T.textFaint} truncate`}>
+              {wallet.address && wallet.address !== '[ENCRYPTED]' ? maskAddress(wallet.address) : <span className={T.textFaint}>Aucune adresse</span>}
+            </div>
+          </div>
+        </div>
+        <div className="flex items-center gap-1.5 flex-shrink-0">
+          <div className="text-right cursor-pointer" onClick={() => startEdit(wallet)}>
+            <div className="font-medium tabular-nums">{displayBalance != null ? maskBalance(displayBalance, 8) : (isWalletEncrypted(wallet) ? '🔒 Chiffré' : '–')}<span className={`${T.textMuted} text-sm ml-1`}>{cfg.symbol}</span></div>
+            <div className={`text-xs ${T.textFaint} tabular-nums`}>{displayBalance != null ? maskBalance(valEur) : '–'} €</div>
+          </div>
+          <div className="flex items-center gap-0 opacity-0 group-hover:opacity-100 transition-all">
+            {wallet.address && (
+              <>
+                <button onClick={handleQuickCopy} title="Copier l'adresse"
+                  className={`p-1 rounded transition-all duration-300 ${isCopied ? 'text-green-400 scale-110' : `${T.textFaint} hover:text-amber-500`}`}>
+                  {isCopied ? <SaveIcon size={12} check /> : <CopyIcon size={12} />}
+                </button>
+                <button onClick={(e) => { e.stopPropagation(); setQrOverlay({ address: wallet.address, name: wallet.name }); }} title="QR Code"
+                  className={`p-1 rounded ${T.textFaint} hover:text-amber-500 transition-colors`}>
+                  <QRCodeIcon size={12} />
+                </button>
+              </>
+            )}
+            {!moneroInfo && (
+              <button onClick={(e) => { e.stopPropagation(); openMoneroSetup(wallet); }} title="Configurer les clés Monero"
+                className={`p-1 rounded text-purple-400 hover:text-purple-300 transition-colors`}>
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/>
+                </svg>
+              </button>
+            )}
+            {moneroInfo && (
+              <button onClick={(e) => { e.stopPropagation(); fetchMoneroBalance(wallet); }} title="Mettre à jour la balance Monero"
+                className={`p-1 rounded ${loading[wallet.id] ? 'text-amber-500 animate-pulse' : `${T.textFaint} hover:text-amber-500`} transition-colors`}>
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="23 4 23 10 17 10"/><polyline points="20 20 14 20 14 14"/><path d="M14 14 20 20"/><path d="M3 4 9 4 9 10"/><path d="M6 20 2 20 2 14"/><path d="M2 14 6 20"/>
+                </svg>
+              </button>
+            )}
+            <button onClick={async (e) => { e.stopPropagation(); if (await showConfirm(`Supprimer "${wallet.name}" ?`)) deleteWallet(wallet.id); }}
+              className={`${T.textFaint} hover:text-red-400 transition-all p-1`}>
+              <TrashIcon />
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+  
+  // Helper to get the actual API key (decrypted if necessary)
+  const getActualApiKey = async () => {
+    // If we have a plaintext key, use it
+    if (etherscanApiKey) {
+      return etherscanApiKey;
+    }
+    
+    // If we have encrypted key and salt, try to decrypt
+    if (encryptedApiKey && apiKeySalt && pinInput) {
+      try {
+        const decryptedKey = await invoke('decrypt_api_key_with_pin', {
+          encrypted_key: encryptedApiKey,
+          salt: apiKeySalt,
+          pin: pinInput
+        });
+        return decryptedKey;
+      } catch (error) {
+        console.error('Échec du déchiffrement de la clé API:', error);
+        showToast('❌ Échec du déchiffrement de la clé API', 3000);
+        return '';
+      }
+    }
+    
+    // No API key available
+    return '';
+  };
+  
+  // Helper to check if API key is encrypted
+  const isApiKeyEncrypted = () => {
+    return !!encryptedApiKey && !!apiKeySalt;
+  };
 
   return (
     <div className={`min-h-screen ${T.bg} ${T.textMain}`}>
@@ -1178,7 +1938,7 @@ const App = () => {
               </button>
               <div>
                 <h1 className="font-bold text-xl select-none cursor-default" onClick={(e) => { if (e.detail === 3) setShowWhitepaper(true); }}>JANUS Monitor</h1>
-                <p className={`text-xs ${T.textMuted}`}>Réserve sécurisée · <span className={T.textFaint}>v2.0</span> · <span className={T.accentMuted}>{activeProfile}</span></p>
+                <p className={`text-xs ${T.textMuted}`}>Réserve sécurisée · <span className={T.textFaint}>v2.2</span> · <span className={T.accentMuted}>{activeProfile}</span></p>
               </div>
             </div>
             <div className="flex items-center gap-2">
@@ -1508,7 +2268,11 @@ const App = () => {
                 <span className="text-base">🔒</span>
                 <div className="text-left flex-1">
                   <div className="font-medium">Sécurité</div>
-                  <div className={`text-xs ${T.textFaint}`}>{profileSecurity.has_pin ? 'PIN actif' : 'Non protégé'}</div>
+                  <div className={`text-xs ${T.textFaint}`}>
+                    {profileSecurity.has_pin ? (
+                      encryptionSalt ? 'PIN actif • Chiffrement actif' : 'PIN actif'
+                    ) : 'Non protégé'}
+                  </div>
                 </div>
                 <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={T.textFaint}>
                   <polyline points="9 18 15 12 9 6"/>
@@ -1612,7 +2376,7 @@ const App = () => {
                     <div className="px-2 pb-2 pt-1 space-y-1">
                       {[
                         { key: 'noctali', label: '🌑 Noctali', desc: 'v1.0 — Umbreon starfield', accent: '#F4D995' },
-                        { key: 'lunarpunk', label: '🔮 Lunar Punk', desc: 'v2.0 — Désert dystopique', accent: '#6d8ff8' },
+                        { key: 'lunarpunk', label: '🔮 Lunar Punk', desc: 'v2.2 — Désert dystopique', accent: '#6d8ff8' },
                       ].map(opt => (
                         <button key={opt.key} onClick={() => setTheme(opt.key)}
                           className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm border transition-all ${theme === opt.key
@@ -1632,9 +2396,31 @@ const App = () => {
                 </div>
                 <div>
                   <label className={`block text-sm ${T.textMuted} mb-1`}>Clé API Etherscan</label>
-                  <input type="text" value={etherscanApiKey} onChange={e => setEtherscanApiKey(e.target.value)}
-                    placeholder="Votre clé API..." className={`w-full px-3 py-2 ${T.inputBg} border ${T.inputBorder} rounded text-sm font-mono focus:outline-none`} />
-                  <p className={`text-xs ${T.textFaint} mt-1`}>Requis pour ETH/ERC-20. <button onClick={() => invoke('open_url', { url: 'https://etherscan.io/apis' })} className="text-amber-500 hover:underline">etherscan.io/apis</button></p>
+                  <div className="flex gap-2">
+                    <input type="text" value={etherscanApiKey} onChange={e => setEtherscanApiKey(e.target.value)}
+                      placeholder="Votre clé API..." 
+                      className={`flex-1 px-3 py-2 ${T.inputBg} border ${T.inputBorder} rounded text-sm font-mono focus:outline-none ${etherscanApiKey ? '' : 'italic'}`} 
+                      disabled={isApiKeyEncrypted()} />
+                    {isApiKeyEncrypted() ? (
+                      <button onClick={decryptApiKeyTemporarily} 
+                        className={`px-3 py-2 ${T.accentBg} ${T.accent} rounded text-sm font-medium hover:opacity-90`} title="Déchiffrer temporairement">
+                        🔓
+                      </button>
+                    ) : (
+                      <button onClick={encryptCurrentApiKey} 
+                        className={`px-3 py-2 bg-green-600 text-white rounded text-sm font-medium hover:bg-green-500`} title="Chiffrer la clé API">
+                        🔒
+                      </button>
+                    )}
+                  </div>
+                  <p className={`text-xs ${T.textFaint} mt-1`}>
+                    {isApiKeyEncrypted() ? (
+                      <span className="text-green-400">✅ Clé API chiffrée et sécurisée </span>
+                    ) : (
+                      <span>Requis pour ETH/ERC-20. </span>
+                    )}
+                    <button onClick={() => invoke('open_url', { url: 'https://etherscan.io/apis' })} className="text-amber-500 hover:underline">etherscan.io/apis</button>
+                  </p>
                 </div>
                 <div className="border-t pt-4">
                   <label className="flex items-center gap-3 cursor-pointer">
@@ -1745,25 +2531,153 @@ const App = () => {
                   </>
                 ) : (
                   <div className="space-y-3">
-                    <p className={`text-sm ${T.textMuted}`}>Ajouter un PIN ou mot de passe pour protéger ce profil. L'écran se verrouillera après un délai d'inactivité configurable.</p>
-                    <div className="flex gap-1">
-                      <input type="password" maxLength={20} placeholder="PIN ou mot de passe (min 4)..."
-                        id="pin-setup-input"
-                        className={`flex-1 px-3 py-2.5 ${T.inputBg} border ${T.inputBorder} rounded-lg text-sm focus:outline-none focus:border-amber-500/50`}
-                        onKeyDown={e => { if (e.key === 'Enter') document.getElementById('pin-setup-confirm')?.click(); }} />
-                      <button id="pin-setup-confirm" onClick={async () => {
-                        const input = document.getElementById('pin-setup-input');
-                        const val = input?.value?.trim();
-                        if (!val || val.length < 4) { showToast('PIN trop court (min 4)'); return; }
-                        const h = await hashPin(val);
-                        await invoke('set_profile_pin', { profileName: activeProfile, pinHash: h, inactivityMinutes: 5 });
-                        setProfileSecurity({ has_pin: true, inactivity_minutes: 5 });
-                        input.value = '';
-                        showToast('🔒 PIN activé (verrou auto: 5 min)');
-                      }} className="px-4 py-2.5 bg-amber-500 text-zinc-900 rounded-lg text-sm font-medium hover:bg-amber-400">Activer</button>
-                    </div>
+                    <p className={`text-sm ${T.textMuted}`}>Configurez un code de sécurité pour protéger l'accès à ce profil et activer le chiffrement des données sensibles.</p>
+                    <button
+                      onClick={openPinSetupOverlay}
+                      className="w-full px-4 py-2.5 bg-amber-500 text-zinc-900 rounded-lg text-sm font-medium hover:bg-amber-400 transition-colors"
+                    >
+                      🔒 Configurer un PIN
+                    </button>
                   </div>
                 )}
+
+                {/* 🔐 ENCRYPTION SECTION 🔐 */}
+                <div className={`border-t border-zinc-800 pt-6 mt-4 ${!profileSecurity.has_pin ? 'opacity-50 pointer-events-none' : ''}`}>
+                  <div className="flex items-center justify-between mb-4">
+                    <div>
+                      <label className={`block text-sm ${T.textMuted} mb-1`}>🔐 Chiffrement des données</label>
+                      <div className={`text-xs ${T.textFaint}`}>Protégez vos adresses de wallet avec le chiffrement AES-256</div>
+                    </div>
+                    <button
+                      onClick={initEncryptionSystem}
+                      className="px-3 py-1 text-xs border border-zinc-700 rounded-lg hover:bg-zinc-800/50 transition-colors"
+                      title="Initialiser le système de chiffrement"
+                      disabled={!profileSecurity.has_pin}
+                    >
+                      ⚡ Initialiser
+                    </button>
+                  </div>
+
+                  <div className="space-y-4">
+                    <div>
+                      <label className={`block text-xs ${T.textMuted} mb-1`}>Sel de chiffrement</label>
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          value={encryptionSalt}
+                          onChange={(e) => setEncryptionSalt(e.target.value)}
+                          placeholder="Générer un sel..."
+                          className={`flex-1 px-3 py-2 ${T.inputBg} border ${T.inputBorder} rounded text-sm font-mono focus:outline-none`}
+                          disabled={!profileSecurity.has_pin}
+                        />
+                        <button
+                          onClick={generateNewSalt}
+                          className="px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg hover:bg-zinc-700 transition-colors"
+                          title="Générer un nouveau sel aléatoire"
+                          disabled={!profileSecurity.has_pin}
+                        >
+                          🎲
+                        </button>
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={() => testEncryption()}
+                      className={`w-full px-4 py-2.5 rounded-lg text-sm font-medium transition-colors ${encryptionSalt && profileSecurity.has_pin
+                        ? 'bg-blue-600 hover:bg-blue-500 text-white'
+                        : 'bg-zinc-800 text-zinc-500 cursor-not-allowed'}`}
+                      disabled={!encryptionSalt || !profileSecurity.has_pin}
+                      title={!profileSecurity.has_pin ? 'Configurez d\'abord un PIN' : encryptionSalt ? 'Tester le chiffrement avec une adresse de test' : 'Générez d\'abord un sel'}
+                    >
+                      🔐 Tester le chiffrement
+                    </button>
+
+                    {testEncryptionResult && (
+                      <div className={`p-3 rounded-lg text-xs ${testEncryptionResult.success
+                        ? 'border border-green-500/30 bg-green-500/5 text-green-400'
+                        : 'border border-red-500/30 bg-red-500/5 text-red-400'}`}
+                      >
+                        {testEncryptionResult.success ? (
+                          <>
+                            <div className="font-medium flex items-center gap-1">
+                              ✅ Chiffrement réussi !
+                              {testEncryptionResult.walletName && (
+                                <span className="text-green-300">Wallet: {testEncryptionResult.walletName}</span>
+                              )}
+                            </div>
+                            <div className={`mt-2 space-y-1`}>
+                              <div className="flex justify-between">
+                                <span className={T.textFaint}>Original:</span>
+                                <span className="font-mono">{testEncryptionResult.original.substring(0, 25)}...</span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className={T.textFaint}>Chiffré:</span>
+                                <span className="font-mono">{testEncryptionResult.encrypted.substring(0, 25)}...</span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className={T.textFaint}>Dé-chiffré:</span>
+                                <span className="font-mono">{testEncryptionResult.decrypted.substring(0, 25)}...</span>
+                              </div>
+                            </div>
+                            <div className={`mt-2 p-2 bg-green-500/10 rounded text-green-300 text-xs`}>
+                              💡 Votre système de chiffrement est opérationnel. Tous vos wallets peuvent maintenant être sécurisés.
+                            </div>
+                          </>
+                        ) : (
+                          <div className="font-medium flex items-center gap-1">
+                            ❌ Échec du test
+                            <span className="text-red-300">({testEncryptionResult.error || 'Données corrompues'})</span>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    <div className="p-3 bg-zinc-900/50 rounded-lg border border-zinc-800 text-xs">
+                      <div className="font-medium mb-2 flex items-center gap-2">
+                        <span>ℹ️</span> <span>Comment ça marche ?</span>
+                      </div>
+                      <div className={`space-y-2 ${T.textFaint}`}>
+                        <p><span className="text-blue-400">•</span> Votre <span className="font-medium text-amber-500">PIN</span> + un <span className="font-medium text-amber-500">sel unique</span> → crée une clé de chiffrement</p>
+                        <p><span className="text-blue-400">•</span> Chaque wallet a son propre sel pour une sécurité maximale</p>
+                        <p><span className="text-blue-400">•</span> Les adresses sont chiffrées avec <span className="font-medium text-amber-500">AES-256-GCM</span></p>
+                        <p><span className="text-blue-400">•</span> Seules les données chiffrées sont stockées</p>
+                      </div>
+                    </div>
+
+                    {profileSecurity.has_pin && encryptionSalt && (
+                      <div className="p-3 bg-green-500/10 border border-green-500/30 rounded-lg text-xs text-green-300">
+                        <div className="font-medium mb-1 flex items-center gap-2">
+                          <span>🔑</span> <span>PIN + Chiffrement activés</span>
+                        </div>
+                        <p>Votre profil est entièrement sécurisé. Les adresses sont chiffrées avec AES-256.</p>
+                        <button
+                          onClick={() => testEncryption()}
+                          className="mt-2 px-3 py-1.5 bg-green-600 text-white text-xs rounded hover:bg-green-500 transition-colors"
+                        >
+                          ✅ Vérifier le chiffrement
+                        </button>
+                      </div>
+                    )}
+                    
+                    {profileSecurity.has_pin && !encryptionSalt && (
+                      <div className="p-3 bg-blue-500/10 border border-blue-500/30 rounded-lg text-xs text-blue-300">
+                        <div className="font-medium mb-1 flex items-center gap-2">
+                          <span>🔑</span> <span>PIN actif - Chiffrement disponible</span>
+                        </div>
+                        <p>Votre code de sécurité protège ce profil. Initialisez et testez le chiffrement.</p>
+                      </div>
+                    )}
+
+                    {!profileSecurity.has_pin && (
+                      <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-lg text-xs text-amber-300">
+                        <div className="font-medium mb-1 flex items-center gap-2">
+                          <span>⚠️</span> <span>PIN requis pour le chiffrement</span>
+                        </div>
+                        <p>Configurez d'abord un PIN ci-dessus pour sécuriser vos données avec le chiffrement.</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
             </div>
           )}
@@ -1849,6 +2763,237 @@ const App = () => {
         </div>
       )}
 
+      {/* 🔒 Monero Setup Overlay - Extended Key Configuration */}
+      {showMoneroSetup && currentMoneroWallet && (
+        <div className="fixed inset-0 z-[100] bg-black/75 flex items-center justify-center p-4" onClick={(e) => { if (e.target === e.currentTarget) closeMoneroSetup(); }}>
+          <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 w-full max-w-md mx-auto shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold text-zinc-100">🔑 Configuration Monero</h3>
+              <button onClick={closeMoneroSetup} className="text-zinc-500 hover:text-amber-500 text-xl transition-colors">✕</button>
+            </div>
+            
+            <p className={`text-sm ${T.textMuted} mb-6`}>
+              Configurez les clés étendues pour accéder à votre wallet Monero. Ces informations sont sensibles et ne quittent jamais votre appareil.
+            </p>
+            
+            <div className="space-y-4">
+              {/* Wallet Info */}
+              <div className="p-3 bg-zinc-800/50 rounded-lg border border-zinc-700">
+                <div className="text-xs text-zinc-400 mb-1">Wallet Monero</div>
+                <div className="font-medium text-zinc-100">{currentMoneroWallet.name}</div>
+                <div className={`text-xs font-mono ${T.textFaint} break-all mt-1`}>
+                  {currentMoneroWallet.address}
+                </div>
+              </div>
+              
+              {/* View Key */}
+              <div>
+                <label className={`block text-xs font-medium ${T.textMuted} mb-1`}>View Key (requis)</label>
+                <input
+                  type="password"
+                  placeholder="64 caractères hexadécimaux..."
+                  className={`w-full px-3 py-2.5 ${T.inputBg} border ${T.inputBorder} rounded-lg text-sm focus:outline-none focus:border-amber-500/50`}
+                  id="monero-view-key-input"
+                  onKeyDown={(e) => { if (e.key === 'Enter') document.getElementById('monero-test-btn')?.click(); }}
+                />
+                <p className={`text-xs ${T.textFaint} mt-1`}>
+                  La view key permet de scanner la blockchain pour vos transactions
+                </p>
+              </div>
+              
+              {/* Spend Key (optional) */}
+              <div>
+                <label className={`block text-xs font-medium ${T.textMuted} mb-1`}>Spend Key (optionnel)</label>
+                <input
+                  type="password"
+                  placeholder="64 caractères hexadécimaux (optionnel)..."
+                  className={`w-full px-3 py-2.5 ${T.inputBg} border ${T.inputBorder} rounded-lg text-sm focus:outline-none focus:border-amber-500/50`}
+                  id="monero-spend-key-input"
+                  onKeyDown={(e) => { if (e.key === 'Enter') document.getElementById('monero-test-btn')?.click(); }}
+                />
+                <p className={`text-xs ${T.textFaint} mt-1`}>
+                  La spend key est nécessaire pour dépenser vos fonds (ne la partagez jamais)
+                </p>
+              </div>
+              
+              {/* Node Selection */}
+              <div>
+                <label className={`block text-xs font-medium ${T.textMuted} mb-1`}>Nœud Monero</label>
+                <select
+                  className={`w-full px-3 py-2.5 ${T.inputBg} border ${T.inputBorder} rounded-lg text-sm`}
+                  id="monero-node-select"
+                  defaultValue={getMoneroDefaultNodes()[0]}
+                >
+                  {getMoneroDefaultNodes().map((node, index) => (
+                    <option key={index} value={node}>{node.replace('http://', '')}</option>
+                  ))}
+                </select>
+                <div className="flex items-center gap-2 mt-2">
+                  {moneroNodeStatus[getMoneroDefaultNodes()[0]]?.success ? (
+                    <span className="text-green-500 text-xs">✓ Nœud accessible</span>
+                  ) : moneroNodeStatus[getMoneroDefaultNodes()[0]]?.error ? (
+                    <span className="text-red-500 text-xs">✗ {moneroNodeStatus[getMoneroDefaultNodes()[0]].error}</span>
+                  ) : (
+                    <span className={`text-xs ${T.textFaint}`}>Test en cours...</span>
+                  )}
+                </div>
+              </div>
+              
+              {/* Test Result */}
+              {moneroTestResult && (
+                <div className={`p-3 rounded-lg text-xs ${moneroTestResult.testing ? 'border border-amber-500/30 bg-amber-500/5' : moneroTestResult.success ? 'border border-green-500/30 bg-green-500/5' : 'border border-red-500/30 bg-red-500/5'}`}>
+                  {moneroTestResult.testing ? (
+                    <div className="text-amber-500 animate-pulse">
+                      🔄 Test de la configuration en cours...
+                    </div>
+                  ) : moneroTestResult.success ? (
+                    <div>
+                      <div className="text-green-500 font-medium">✅ Configuration valide !</div>
+                      <div className="mt-2 space-y-1">
+                        <div className="flex justify-between">
+                          <span className={T.textFaint}>Balance:</span>
+                          <span className="font-mono">{moneroTestResult.balance} XMR</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className={T.textFaint}>Disponible:</span>
+                          <span className="font-mono">{moneroTestResult.unlockedBalance} XMR</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className={T.textFaint}>Nœud:</span>
+                          <span className="font-mono text-green-400">✓ Hauteur {moneroTestResult.nodeInfo.height}</span>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-red-500">
+                      ❌ Échec: {moneroTestResult.error}
+                    </div>
+                  )}
+                </div>
+              )}
+              
+              {/* Action Buttons */}
+              <div className="flex gap-2">
+                <button
+                  id="monero-test-btn"
+                  onClick={async () => {
+                    const viewKey = document.getElementById('monero-view-key-input').value;
+                    const spendKey = document.getElementById('monero-spend-key-input').value || null;
+                    const node = document.getElementById('monero-node-select').value;
+                    
+                    await testMoneroConfiguration(currentMoneroWallet.address, viewKey, spendKey, node);
+                  }}
+                  className="flex-1 px-4 py-2.5 bg-amber-500 text-zinc-900 rounded-lg text-sm font-medium hover:bg-amber-400 transition-colors"
+                >
+                  🔍 Tester la Configuration
+                </button>
+                
+                <button
+                  onClick={async () => {
+                    const viewKey = document.getElementById('monero-view-key-input').value;
+                    const spendKey = document.getElementById('monero-spend-key-input').value || null;
+                    const node = document.getElementById('monero-node-select').value;
+                    
+                    const success = await saveMoneroConfiguration(
+                      currentMoneroWallet, 
+                      viewKey, 
+                      spendKey, 
+                      node
+                    );
+                    
+                    if (success) {
+                      closeMoneroSetup();
+                    }
+                  }}
+                  className="flex-1 px-4 py-2.5 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-500 transition-colors"
+                >
+                  ✅ Enregistrer
+                </button>
+              </div>
+              
+              {/* Security Warning */}
+              <div className={`p-3 bg-zinc-900/50 rounded-lg border border-zinc-800 text-xs ${T.textFaint}`}>
+                <div className="font-medium mb-2 flex items-center gap-2">
+                  <span>🔒</span> <span>Important : Sécurité</span>
+                </div>
+                <ul className="space-y-1 pl-4">
+                  <li>• Ces clés ne sont <strong>jamais</strong> envoyées à des serveurs distants</li>
+                  <li>• Elles sont stockées localement et chiffrées avec votre PIN</li>
+                  <li>• Ne partagez <strong>jamais</strong> votre spend key</li>
+                  <li>• La view key permet uniquement de <strong>voir</strong> les transactions</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      
+      {/* 🔒 PIN Setup Overlay - Professional PIN Configuration */}
+      {showPinSetupOverlay && (
+        <div className="fixed inset-0 z-[100] bg-black/75 flex items-center justify-center p-4" onClick={(e) => { if (e.target === e.currentTarget) closePinSetupOverlay(); }}>
+          <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 w-full max-w-md mx-auto shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold text-zinc-100">🔒 Configuration du Code de Sécurité</h3>
+              <button onClick={closePinSetupOverlay} className="text-zinc-500 hover:text-amber-500 text-xl transition-colors">✕</button>
+            </div>
+            
+            <p className={`text-sm ${T.textMuted} mb-6`}>
+              Configurez un code PIN pour protéger l'accès à votre profil et activer le chiffrement des données sensibles.
+            </p>
+            
+            <div className="space-y-4">
+              <div>
+                <label className={`block text-xs font-medium ${T.textMuted} mb-1`}>Nouveau Code de Sécurité</label>
+                <input
+                  type="password"
+                  value={newPin}
+                  onChange={(e) => setNewPin(e.target.value)}
+                  maxLength={20}
+                  placeholder="Minimum 4 caractères..."
+                  className={`w-full px-3 py-2.5 ${T.inputBg} border ${T.inputBorder} rounded-lg text-sm focus:outline-none focus:border-amber-500/50`}
+                  onKeyDown={(e) => { if (e.key === 'Enter') handlePinSetup(); }}
+                />
+              </div>
+              
+              <div>
+                <label className={`block text-xs font-medium ${T.textMuted} mb-1`}>Confirmer le Code de Sécurité</label>
+                <input
+                  type="password"
+                  value={confirmPin}
+                  onChange={(e) => setConfirmPin(e.target.value)}
+                  maxLength={20}
+                  placeholder="Répétez le code..."
+                  className={`w-full px-3 py-2.5 ${T.inputBg} border ${T.inputBorder} rounded-lg text-sm focus:outline-none focus:border-amber-500/50`}
+                  onKeyDown={(e) => { if (e.key === 'Enter') handlePinSetup(); }}
+                />
+              </div>
+              
+              {pinSetupError && (
+                <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-xs text-red-400">
+                  <span className="font-medium">⚠️ </span>{pinSetupError}
+                </div>
+              )}
+              
+              <button
+                onClick={handlePinSetup}
+                className="w-full px-4 py-2.5 bg-amber-500 text-zinc-900 rounded-lg text-sm font-medium hover:bg-amber-400 transition-colors"
+              >
+                🔒 Configurer le Code de Sécurité
+              </button>
+              
+              <div className={`p-3 bg-zinc-900/50 rounded-lg border border-zinc-800 text-xs ${T.textFaint}`}>
+                <div className="font-medium mb-2">ℹ️ Conseils de sécurité :</div>
+                <ul className="space-y-1 pl-4">
+                  <li>• Utilisez au moins 6 caractères</li>
+                  <li>• Évitez les codes évidents (1234, 0000)</li>
+                  <li>• Mémorisez votre code - il ne peut pas être récupéré</li>
+                  <li>• Ce code protège l'accès et le chiffrement</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

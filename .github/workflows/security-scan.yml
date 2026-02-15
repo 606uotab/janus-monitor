@@ -1,0 +1,31 @@
+name: Dependency Security Scan
+'on':
+  schedule:
+    - cron: 0 0 * * 0
+  push:
+    branches:
+      - main
+      - develop
+jobs:
+  security_scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node_version: '20'
+      - name: Install dependencies
+        run: npm ci
+      - name: Run security audit
+        run: npm audit
+      - name: Check for outdated dependencies
+        run: npm outdated
+      - name: Generate security report
+        run: node scripts/dependency-management.mjs generate
+      - name: Upload security report
+        uses: actions/upload-artifact@v3
+        with:
+          name: security-report
+          path: security-report.json

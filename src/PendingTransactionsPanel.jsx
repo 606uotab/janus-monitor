@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { secureFetchAddressHistory } from './secureBackend.js';
 
 const EXPLORERS = {
   btc: [
@@ -110,21 +111,41 @@ export default function PendingTransactionsPanel({ show, onClose, onBackToMenu, 
       const walletsWithAddr = wallets.filter(w => w.address && w.address.trim() && supportedAssets.includes(w.asset?.toLowerCase()));
 
       const promises = walletsWithAddr.map(w =>
-        invoke('fetch_address_history', {
-          address: w.address,
-          asset: w.asset.toLowerCase(),
-          walletName: w.name || w.asset.toUpperCase(),
-          etherscanKey: ethKey || null,
-          limit: 10,
-        }).catch(e => { console.warn(`History ${w.name || w.asset}:`, e); return []; })
+        secureFetchAddressHistory(
+          w.address,
+          w.asset.toLowerCase(),
+          w.name || w.asset.toUpperCase(),
+          ethKey || null,
+          10
+        ).catch(e => { 
+          console.warn(`History ${w.name || w.asset}:`, e); 
+          showToast(`⚠️ Erreur historique pour ${w.asset.toUpperCase()}`, 2000);
+          return []; 
+        })
       );
 
       const results = await Promise.all(promises);
-      const all = results.flat();
+      
+      // Validation des résultats
+      const validatedResults = results.map(result => {
+        if (!Array.isArray(result)) {
+          console.warn('Résultat historique invalide:', result);
+          return [];
+        }
+        return result.filter(tx => 
+          tx && tx.tx_hash && tx.asset && typeof tx.timestamp === 'number'
+        );
+      });
+      
+      const all = validatedResults.flat();
       all.sort((a, b) => b.timestamp - a.timestamp);
       setHistoryTxs(all);
-    } catch (e) { console.error('History:', e); }
-    finally { setHistoryLoading(false); }
+    } catch (e) {
+      console.error('Erreur historique:', e);
+      showToast('❌ Erreur de chargement de l\'historique', 3000);
+    } finally {
+      setHistoryLoading(false);
+    }
   };
 
   const handleClear = async (txHash) => {
