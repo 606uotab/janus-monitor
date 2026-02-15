@@ -416,11 +416,8 @@ const App = () => {
   };
 
   // ── PIN utilities ──
-  const hashPin = async (pin) => {
-    const data = new TextEncoder().encode(pin);
-    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-    return Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
-  };
+  // ✅ REMOVED: hashPin() — PIN is now hashed server-side with Argon2id
+  // The raw PIN is sent securely via Tauri IPC (same-process, no network)
 
   // ── PIN Setup Overlay ──
   const [showPinSetupOverlay, setShowPinSetupOverlay] = useState(false);
@@ -457,10 +454,10 @@ const App = () => {
     
     try {
       setPinSetupError('');
-      const h = await hashPin(newPin);
+      // ✅ PATCHED: Send raw PIN to Rust backend for Argon2id hashing
       await invoke('set_profile_pin', { 
         profileName: activeProfile, 
-        pinHash: h, 
+        rawPin: newPin, 
         inactivityMinutes: 5 
       });
       
@@ -797,9 +794,10 @@ const App = () => {
   };
 
   const handleUnlock = async () => {
-    const h = await hashPin(pinInput);
+    if (!pinInput || pinInput.length === 0) { setPinError('Entrez votre PIN'); return; }
     try {
-      const ok = await invoke('verify_profile_pin', { profileName: activeProfile, pinHash: h });
+      // ✅ PATCHED: Send raw PIN for Argon2id verification + rate limiting
+      const ok = await invoke('verify_profile_pin', { profileName: activeProfile, rawPin: pinInput });
       if (ok) {
         setIsLocked(false);
         setPinInput('');
@@ -809,7 +807,15 @@ const App = () => {
         setPinError('Code incorrect');
         setPinInput('');
       }
-    } catch(_) { setPinError('Erreur vérification'); }
+    } catch(err) {
+      const errMsg = String(err);
+      if (errMsg.includes('verrouillé') || errMsg.includes('tentatives')) {
+        setPinError(errMsg);
+      } else {
+        setPinError('Erreur vérification');
+      }
+      setPinInput('');
+    }
   };
 
   const resetInactivityTimer = () => {

@@ -7,6 +7,9 @@ use hex;
 use lazy_static::lazy_static;
 use reqwest;
 
+mod pin_security;
+mod input_validation;
+
 // 
 // SECURE LOGGING SYSTEM
 // 
@@ -17,20 +20,20 @@ lazy_static! {
         // For now, we'll generate a key at startup
         secretbox::gen_key()
     };
-    static ref LOG_NONCE: secretbox::Nonce = {
-        // We'll use a fixed nonce for simplicity, but in production
-        // you should use a unique nonce for each message
-        secretbox::gen_nonce()
-    };
 }
 
 /// Secure logger that encrypts sensitive information
 fn secure_log(message: &str, sensitive_data: &str) {
-    // Encrypt the sensitive data
-    let encrypted = secretbox::seal(sensitive_data.as_bytes(), &LOG_NONCE, &LOG_KEY);
-    let encrypted_hex = hex::encode(encrypted);
-    
-    // Log the message with encrypted data
+    // ✅ FIXED: Generate unique nonce per message (was reusing single nonce)
+    let nonce = secretbox::gen_nonce();
+    let encrypted = secretbox::seal(sensitive_data.as_bytes(), &nonce, &LOG_KEY);
+
+    // Prepend nonce to ciphertext for later decryption
+    let mut result = Vec::with_capacity(secretbox::NONCEBYTES + encrypted.len());
+    result.extend_from_slice(nonce.as_ref());
+    result.extend_from_slice(&encrypted);
+
+    let encrypted_hex = hex::encode(&result);
     println!("[SECURE_LOG] {} [ENCRYPTED: {}]", message, encrypted_hex);
 }
 
@@ -239,7 +242,11 @@ fn start_monitoring_wallet(
     if address.trim().is_empty() {
         return Ok(()); // Pas d'adresse, rien à monitorer
     }
-    
+
+    input_validation::validate_asset(&asset)?;
+    input_validation::validate_address(&asset, &address)?;
+    log_address("MONITOR_START", &address);
+
     tauri::async_runtime::block_on(async {
         let mut state = monitoring_state.lock().await;
         
@@ -661,6 +668,7 @@ pub struct ProfileSecurity {
 
 #[tauri::command]
 fn get_profile_security(state: State<DbState>, profile_name: String) -> Result<ProfileSecurity, String> {
+    input_validation::validate_profile_name(&profile_name)?;
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     match conn.query_row(
         "SELECT pin_hash, inactivity_minutes FROM profile_security WHERE profile_name = ?1",
@@ -672,40 +680,110 @@ fn get_profile_security(state: State<DbState>, profile_name: String) -> Result<P
     }
 }
 
+// ✅ PATCHED: Argon2id server-side hashing (was receiving pre-hashed SHA-256)
 #[tauri::command]
-fn set_profile_pin(state: State<DbState>, profile_name: String, pin_hash: String, inactivity_minutes: Option<u32>) -> Result<(), String> {
+fn set_profile_pin(state: State<DbState>, profile_name: String, raw_pin: String, inactivity_minutes: Option<u32>) -> Result<(), String> {
+    input_validation::validate_profile_name(&profile_name)?;
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     let mins = inactivity_minutes.unwrap_or(0) as i64;
-    if pin_hash == "__KEEP__" {
-        // Only update timer, keep existing PIN hash
+    if raw_pin == "__KEEP__" {
         conn.execute(
             "UPDATE profile_security SET inactivity_minutes = ?1 WHERE profile_name = ?2",
             params![mins, profile_name],
         ).map_err(|e| e.to_string())?;
     } else {
+        let argon2_hash = pin_security::hash_pin(&raw_pin)?;
         conn.execute(
             "INSERT OR REPLACE INTO profile_security (profile_name, pin_hash, inactivity_minutes) VALUES (?1, ?2, ?3)",
-            params![profile_name, pin_hash, mins],
+            params![profile_name, argon2_hash, mins],
         ).map_err(|e| e.to_string())?;
+        println!("[SECURITY] PIN set for profile '{}' using Argon2id", profile_name);
     }
     Ok(())
 }
 
+// ✅ PATCHED: Argon2id + rate limiting + legacy migration (was SHA-256 == compare)
 #[tauri::command]
-fn verify_profile_pin(state: State<DbState>, profile_name: String, pin_hash: String) -> Result<bool, String> {
+fn verify_profile_pin(state: State<DbState>, profile_name: String, raw_pin: String) -> Result<bool, String> {
+    input_validation::validate_profile_name(&profile_name)?;
+    if raw_pin.is_empty() { return Err("PIN cannot be empty".to_string()); }
+
+    // Rate limit check
+    pin_security::check_rate_limit(&profile_name)?;
+
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    match conn.query_row(
+    let stored_hash = match conn.query_row(
         "SELECT pin_hash FROM profile_security WHERE profile_name = ?1",
         params![profile_name],
         |row| row.get::<_, String>(0),
     ) {
-        Ok(stored_hash) => Ok(stored_hash == pin_hash),
-        Err(_) => Ok(true), // No PIN set = always valid
+        Ok(hash) => hash,
+        Err(_) => return Ok(true), // No PIN set = always valid
+    };
+
+    // Legacy SHA-256 migration
+    if pin_security::is_legacy_sha256_hash(&stored_hash) {
+        let legacy_hash = sha256_hex(&raw_pin);
+        if legacy_hash == stored_hash {
+            let new_hash = pin_security::migrate_pin_hash(&raw_pin)?;
+            conn.execute(
+                "UPDATE profile_security SET pin_hash = ?1 WHERE profile_name = ?2",
+                params![new_hash, profile_name],
+            ).map_err(|e| e.to_string())?;
+            println!("[SECURITY] Migrated '{}' from SHA-256 to Argon2id", profile_name);
+            pin_security::record_successful_attempt(&profile_name)?;
+            return Ok(true);
+        } else {
+            let remaining = pin_security::record_failed_attempt(&profile_name)?;
+            if remaining > 0 {
+                println!("[SECURITY] Failed PIN for '{}' ({} remaining)", profile_name, remaining);
+            }
+            return Ok(false);
+        }
+    }
+
+    // Argon2id verification (constant-time)
+    let is_valid = pin_security::verify_pin(&raw_pin, &stored_hash)?;
+    if is_valid {
+        pin_security::record_successful_attempt(&profile_name)?;
+    } else {
+        let remaining = pin_security::record_failed_attempt(&profile_name)?;
+        if remaining > 0 {
+            println!("[SECURITY] Failed PIN for '{}' ({} remaining)", profile_name, remaining);
+        }
+    }
+    Ok(is_valid)
+}
+
+// SHA-256 helper for legacy migration only
+fn sha256_hex(input: &str) -> String {
+    let hash = sodiumoxide::crypto::hash::sha256::hash(input.as_bytes());
+    hex::encode(hash.as_ref())
+}
+
+// ✅ NEW: Rate limit status for frontend feedback
+#[derive(Debug, Serialize)]
+pub struct PinStatus {
+    pub is_locked: bool,
+    pub max_attempts: u32,
+    pub retry_after_secs: u64,
+}
+
+#[tauri::command]
+fn get_pin_status(profile_name: String) -> Result<PinStatus, String> {
+    input_validation::validate_profile_name(&profile_name)?;
+    match pin_security::check_rate_limit(&profile_name) {
+        Ok(()) => Ok(PinStatus { is_locked: false, max_attempts: 10, retry_after_secs: 0 }),
+        Err(msg) => {
+            let secs = msg.split_whitespace().filter_map(|w: &str| w.parse::<u64>().ok()).next().unwrap_or(0);
+            Ok(PinStatus { is_locked: secs > 60, max_attempts: 10, retry_after_secs: secs })
+        }
     }
 }
 
 #[tauri::command]
 fn remove_profile_pin(state: State<DbState>, profile_name: String) -> Result<(), String> {
+    input_validation::validate_profile_name(&profile_name)?;
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     conn.execute("DELETE FROM profile_security WHERE profile_name = ?1", params![profile_name])
         .map_err(|e| e.to_string())?;
@@ -770,7 +848,8 @@ pub fn start_monitoring_task(
                         ).await;
                     }
                     Err(e) => {
-                        eprintln!("Erreur monitoring {} ({}): {}", address, wallet_info.asset, e);
+                        log_api_response("MONITORING_ERROR", &format!("{}: {}", wallet_info.asset, e), 100);
+                        log_address("MONITORING_ERROR", &address);
                     }
                 }
                 
@@ -1439,6 +1518,9 @@ fn get_wallets(state: State<DbState>) -> Result<Vec<Wallet>, String> {
 
 #[tauri::command]
 fn update_wallet(state: State<DbState>, id: i64, name: String, address: String, balance: Option<f64>) -> Result<(), String> {
+    input_validation::validate_wallet_name(&name)?;
+    input_validation::validate_balance(balance)?;
+    if let Some(b) = balance { log_balance("UPDATE_WALLET", b); }
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     conn.execute(
         "UPDATE wallets SET name = ?1, address = ?2, balance = ?3, updated_at = CURRENT_TIMESTAMP WHERE id = ?4",
@@ -1449,6 +1531,8 @@ fn update_wallet(state: State<DbState>, id: i64, name: String, address: String, 
 
 #[tauri::command]
 fn add_wallet(state: State<DbState>, category_id: i64, asset: String, name: String) -> Result<i64, String> {
+    input_validation::validate_asset(&asset)?;
+    input_validation::validate_wallet_name(&name)?;
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     conn.execute(
         "INSERT INTO wallets (category_id, asset, name, address) VALUES (?1, ?2, ?3, \"\")",
@@ -1496,6 +1580,7 @@ fn save_settings(state: State<DbState>, settings: Settings) -> Result<(), String
 
 #[tauri::command]
 fn get_setting(state: State<DbState>, key: String) -> Result<String, String> {
+    input_validation::validate_setting_key(&key)?;
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     conn.query_row(
         "SELECT value FROM settings WHERE key = ?1",
@@ -1506,6 +1591,8 @@ fn get_setting(state: State<DbState>, key: String) -> Result<String, String> {
 
 #[tauri::command]
 fn set_setting(state: State<DbState>, key: String, value: String) -> Result<(), String> {
+    input_validation::validate_setting_key(&key)?;
+    input_validation::validate_setting_value(&value)?;
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     conn.execute(
         "INSERT OR REPLACE INTO settings (key, value) VALUES (?1, ?2)",
@@ -3130,6 +3217,7 @@ pub fn run() {
             set_profile_pin,
             verify_profile_pin,
             remove_profile_pin,
+            get_pin_status,             // 🔒 Rate limit status
             test_monero_node,               // 🪙 MONERO: Test nœud
             get_monero_balance,             // 🪙 MONERO: Balance
             get_monero_transactions,        // 🪙 MONERO: Historique

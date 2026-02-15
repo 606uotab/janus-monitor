@@ -25,3 +25,18 @@ npm-debug.log*
 
 # Tauri
 src-tauri/target/
+
+# ── Security Patch v2.2.1 ──
+*.backup
+*.before_fix
+*.before_tokens
+*.original
+*.bak
+*.pre_security_patch_*
+security-report.json
+dependency-report.json
+security-audit.log
+test_pin_functions.js
+test_secure_logging.rs
+test_monero_rust_backend.sh
+write_pivx_module.py
