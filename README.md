@@ -1,10 +1,10 @@
-# JANUS Monitor v2.3.0
+# JANUS Monitor v2.3.1
 
-Application de bureau pour suivre en temps réel un portefeuille crypto selon la stratégie JANUS : **85 % Bitcoin** en réserve de valeur, **15 % diversification** entre hedging et altcoins.
+Application desktop et mobile pour suivre en temps réel un portefeuille crypto selon la stratégie JANUS : **85 % Bitcoin** en réserve de valeur, **15 % diversification** entre hedging et altcoins.
 
 ![Tauri](https://img.shields.io/badge/Tauri%202-Rust%20%2B%20React-blue)
-![Platform](https://img.shields.io/badge/Platform-Linux%20Debian-orange)
-![Version](https://img.shields.io/badge/Version-2.3.0-green)
+![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20Android-orange)
+![Version](https://img.shields.io/badge/Version-2.3.1-green)
 ![Security](https://img.shields.io/badge/Security-Argon2id%20%2B%20TOTP%20%2B%20libsodium-red)
 
 ---
@@ -67,11 +67,18 @@ Application de bureau pour suivre en temps réel un portefeuille crypto selon la
 | Noctali | Special Edition v1.0 | Ultra-sombre, voie lactée animée, croissant de lune plasma, illustrations Umbreon |
 | Lunar Punk | Special Edition v2.2 | Désert dystopique, dunes violettes ondulantes, ruines de cité, dômes-abris, lune plasma, poussière cosmique |
 | Solarpunk | Special Edition v2.3.0 | Fond JPEG Art Nouveau avec ville cyberpunk en ombre floue, collines verdoyantes, pollen doré animé |
+| St. Jude | Special Edition v2.3 | Hommage cypherpunk à Jude Milhon — verre émeraude sombre, PGP watermark défilant, citations hex/binaire/octal, portraits |
 
 ### Intégrations blockchain *(v2.2)*
 - **Monero (XMR)** — Intégration noeud RPC (view key + spend key), saisie manuelle, prix Bitfinex
 - **PIVX** — Intégration noeud RPC (balance régulière + zPIV), saisie manuelle
 - Architecture par famille de blockchains
+
+### Android *(v2.3.1)*
+- Port natif via Tauri Mobile (même codebase Rust + React)
+- APK release signé (~12 MB ARM64)
+- Compatible Android 7+ (API 24)
+- Testé sur émulateur Android API 36
 
 ---
 
@@ -109,30 +116,45 @@ Application de bureau pour suivre en temps réel un portefeuille crypto selon la
 
 ## Installation
 
-### Depuis une release (.deb)
+### Desktop (Linux)
+
+#### Depuis une release (.deb)
 
 ```bash
-sudo dpkg -i janus-monitor_2.3.0_amd64.deb
+sudo dpkg -i janus-monitor_2.3.1_amd64.deb
 ```
 
-### Depuis une release (AppImage)
+#### Depuis une release (AppImage)
 
 ```bash
-chmod +x janus-monitor_2.3.0_amd64.AppImage
-./janus-monitor_2.3.0_amd64.AppImage
+chmod +x janus-monitor_2.3.1_amd64.AppImage
+./janus-monitor_2.3.1_amd64.AppImage
 ```
 
 > L'AppImage ne nécessite aucune installation. Il suffit de le rendre exécutable et de le lancer.
+
+### Android
+
+#### Depuis l'APK
+
+Télécharger `app-universal-release.apk` depuis les releases et l'installer sur le téléphone :
+
+```bash
+# Via ADB
+adb install app-universal-release.apk
+```
+
+Ou transférer le fichier `.apk` sur le téléphone et l'ouvrir (activer "Sources inconnues" dans les paramètres).
 
 ---
 
 ## Mise à jour depuis une version antérieure
 
-### Mise à jour .deb (v1.x / v2.x → v2.3.0)
+### Mise à jour .deb (v1.x / v2.x → v2.3.1)
 
 ```bash
 # Le .deb remplace automatiquement l'ancienne version
-sudo dpkg -i janus-monitor_2.3.0_amd64.deb
+sudo dpkg -i janus-monitor_2.3.1_amd64.deb
 ```
 
 Vos données (profils, wallets, catégories) sont conservées automatiquement — elles sont stockées dans le répertoire de données Tauri (`~/.local/share/com.janus.monitor/`) et ne sont pas touchées par la mise à jour du paquet.
@@ -144,8 +166,8 @@ Vos données (profils, wallets, catégories) sont conservées automatiquement �
 rm janus-monitor_*_amd64.AppImage
 
 # 2. Rendre le nouveau exécutable et lancer
-chmod +x janus-monitor_2.3.0_amd64.AppImage
-./janus-monitor_2.3.0_amd64.AppImage
+chmod +x janus-monitor_2.3.1_amd64.AppImage
+./janus-monitor_2.3.1_amd64.AppImage
 ```
 
 ### Mise à jour depuis les sources (git pull)
@@ -163,7 +185,9 @@ Les nouveaux bundles sont générés dans `src-tauri/target/release/bundle/`.
 
 ## Build depuis les sources
 
-### Prérequis système (Debian / Ubuntu)
+### Desktop (Linux)
+
+#### Prérequis système (Debian / Ubuntu)
 
 ```bash
 # Dépendances système pour Tauri 2
@@ -179,7 +203,7 @@ sudo apt install -y \
     pkg-config
 ```
 
-### Rust (stable)
+#### Rust (stable)
 
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
@@ -187,20 +211,20 @@ source "$HOME/.cargo/env"
 rustup update stable
 ```
 
-### Node.js 20+
+#### Node.js 20+
 
 ```bash
 curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
 sudo apt install -y nodejs
 ```
 
-### Tauri CLI
+#### Tauri CLI
 
 ```bash
 cargo install tauri-cli
 ```
 
-### Cloner et installer
+#### Cloner et installer
 
 ```bash
 git clone https://github.com/606uotab/janus-monitor.git
@@ -208,7 +232,7 @@ cd janus-monitor
 npm install
 ```
 
-### Lancer en mode développement
+#### Lancer en mode développement
 
 ```bash
 cargo tauri dev
@@ -216,7 +240,7 @@ cargo tauri dev
 
 L'application se lance avec hot-reload frontend (Vite) et recompilation backend (Cargo).
 
-### Créer les paquets de distribution
+#### Créer les paquets de distribution
 
 ```bash
 cargo tauri build
@@ -226,30 +250,49 @@ Cette commande produit deux fichiers dans `src-tauri/target/release/bundle/` :
 
 | Format | Chemin | Usage |
 |--------|--------|-------|
-| **AppImage** | `bundle/appimage/janus-monitor_2.3.0_amd64.AppImage` | Exécutable portable, aucune installation requise |
-| **Debian (.deb)** | `bundle/deb/janus-monitor_2.3.0_amd64.deb` | Installation système via `dpkg -i` |
+| **AppImage** | `bundle/appimage/janus-monitor_2.3.1_amd64.AppImage` | Exécutable portable, aucune installation requise |
+| **Debian (.deb)** | `bundle/deb/janus-monitor_2.3.1_amd64.deb` | Installation système via `dpkg -i` |
 
 > **Note** : Le build release active LTO (Link-Time Optimization), strip des symboles et optimise la taille du binaire. La première compilation peut prendre plusieurs minutes.
 
-### Installer le .deb local après build
+### Android
+
+#### Prérequis
+
+- JDK 17 (Adoptium Temurin recommandé)
+- Android SDK (platform 34, build-tools 34, NDK 27)
+- Rust Android targets
 
 ```bash
-sudo dpkg -i src-tauri/target/release/bundle/deb/janus-monitor_2.3.0_amd64.deb
+# Installer les targets Rust Android
+rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android
+
+# Variables d'environnement (à ajouter dans .bashrc)
+export JAVA_HOME=/path/to/jdk-17
+export ANDROID_HOME=/path/to/android-sdk
+export NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973
+export PATH="$JAVA_HOME/bin:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
 ```
 
-### Lancer l'AppImage après build
+#### Initialiser le projet Android
 
 ```bash
-chmod +x src-tauri/target/release/bundle/appimage/janus-monitor_2.3.0_amd64.AppImage
-./src-tauri/target/release/bundle/appimage/janus-monitor_2.3.0_amd64.AppImage
+cargo tauri android init
 ```
 
-### Désinstaller
+#### Build debug (émulateur)
 
 ```bash
-# Si installé via .deb
-sudo dpkg -r janus-monitor
+cargo tauri android dev
 ```
+
+#### Build release signé (APK)
+
+```bash
+cargo tauri android build --target aarch64
+```
+
+L'APK signé se trouve dans `src-tauri/gen/android/app/build/outputs/apk/universal/release/`.
 
 ---
 
@@ -259,11 +302,11 @@ sudo dpkg -r janus-monitor
 |-----------|-------------|
 | Frontend | React 18 + Tailwind CSS + Vite |
 | Backend | Rust (Tauri 2) |
-| Base de données | SQLite (rusqlite) |
-| HTTP | reqwest (async) |
+| Base de données | SQLite (rusqlite, bundled) |
+| HTTP | reqwest (rustls-tls) |
 | Prix | Binance API + Bitfinex (XMR, XAUT) |
 | Sécurité | Argon2id (PIN/password) + TOTP 2FA (totp-rs) + libsodium (chiffrement) |
-| Distribution | AppImage + .deb (Debian/Ubuntu) |
+| Distribution | AppImage + .deb (Linux) / APK + AAB (Android) |
 
 ---
 
@@ -283,17 +326,20 @@ janus-monitor/
 │       ├── index.js                  # Barrel exports
 │       ├── NoctaliTheme.jsx          # Thème Noctali (v1.0) — Umbreon starfield
 │       ├── LunarPunkTheme.jsx        # Thème Lunar Punk (v2.2) — Désert dystopique
-│       └── SolarpunkTheme.jsx        # Thème Solarpunk (v2.3.0) — Nature meets technology
+│       ├── SolarpunkTheme.jsx        # Thème Solarpunk (v2.3.0) — Nature meets technology
+│       └── StJudeTheme.jsx           # Thème St. Jude (v2.3) — Cypherpunk Jude Milhon
 ├── src-tauri/
-│   └── src/
-│       ├── main.rs                   # Point d'entrée Tauri
-│       ├── lib.rs                    # Backend principal (commandes, API, DB)
-│       ├── pin_security.rs           # Hashage PIN Argon2id
-│       ├── totp_security.rs          # 2FA TOTP (generation, verification, chiffrement)
-│       ├── input_validation.rs       # Validation des entrées
-│       ├── secure_key_storage.rs     # Stockage de clés chiffré
-│       ├── monero_integration.rs     # Intégration noeud Monero RPC
-│       └── pivx_integration.rs       # Intégration noeud PIVX RPC
+│   ├── src/
+│   │   ├── main.rs                   # Point d'entrée Tauri
+│   │   ├── lib.rs                    # Backend principal (commandes, API, DB)
+│   │   ├── pin_security.rs           # Hashage PIN Argon2id
+│   │   ├── totp_security.rs          # 2FA TOTP (generation, verification, chiffrement)
+│   │   ├── input_validation.rs       # Validation des entrées
+│   │   ├── secure_key_storage.rs     # Stockage de clés chiffré
+│   │   ├── monero_integration.rs     # Intégration noeud Monero RPC
+│   │   └── pivx_integration.rs       # Intégration noeud PIVX RPC
+│   └── gen/
+│       └── android/                  # Projet Android généré (Gradle, Kotlin)
 ├── scripts/
 │   └── dependency-management.mjs     # Audit de sécurité des dépendances
 ├── .github/
@@ -307,11 +353,13 @@ janus-monitor/
 
 ## Configuration
 
-Au premier lancement, l'application crée une base SQLite dans `~/.local/share/com.janus.monitor/`.
+Au premier lancement, l'application crée une base SQLite dans :
+- **Linux** : `~/.local/share/com.janus.monitor/`
+- **Android** : répertoire data interne de l'application
 
 **Paramètres** (menu hamburger) :
 - **Clé API Etherscan** — améliore la fiabilité des requêtes ETH/ERC-20
-- **Thème** — 3 thèmes principaux + 3 Special Edition
+- **Thème** — 3 thèmes principaux + 4 Special Edition
 - **Notifications** — activer/désactiver les alertes de transactions entrantes
 - **Sécurité** — PIN/mot de passe + timer d'inactivité
 
@@ -353,7 +401,7 @@ Le script produit `solarpunk_bg.jpg` (Art Nouveau, collines, ville cyberpunk en 
 | Raccourci | Action |
 |-----------|--------|
 | `Ctrl+Shift+P` | Terminal de prix Bloomberg-style |
-| Triple-clic sur "JANUS Monitor" | Whitepaper Bitcoin (easter egg) |
+| Triple-clic sur "JANUS Monitor" | Whitepaper Bitcoin (ou Wikipedia Jude Milhon en thème St. Jude) |
 
 ---
 
