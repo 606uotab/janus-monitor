@@ -21,7 +21,7 @@ import {
 } from './integrations';
 import PendingTransactionsPanel from './PendingTransactionsPanel';
 import TokenSearch from './TokenSearch';
-import { NoctaliMoon, NoctaliImages, NoctaliStarfield, LunarPunkMoon, LunarPunkDunes, LunarPunkDust, SolarpunkBackground, SolarpunkPollen } from './themes';
+import { NoctaliMoon, NoctaliImages, NoctaliStarfield, LunarPunkMoon, LunarPunkDunes, LunarPunkDust, SolarpunkBackground, SolarpunkPollen, StJudePortrait, StJudeBanner, StJudePGPWatermark, StJudeQuotes } from './themes';
 
 // ── SVG Icons ──
 const EyeIcon = () => (
@@ -136,6 +136,18 @@ const themes = {
     barBg: 'bg-[#b4ccaa]/60', divider: 'border-[#a8c898]/40',
     accent: 'text-[#2a7a1a]', accentBg: 'bg-[#2a7a1a]', accentBorder: 'border-[#2a7a1a]',
     accentMuted: 'text-[#2a7a1a]/70', accentHover: 'hover:bg-[#3a8a28]',
+  },
+  stjude: {
+    // St. Jude (Cypherpunk Minimal): verre émeraude sombre, hommage Jude Milhon
+    bg: 'bg-[#08120e]', textMain: 'text-[#b8d8c8]', textMuted: 'text-[#5a8a70]', textFaint: 'text-[#2e5442]',
+    cardBg: 'bg-[#0c1a14]', cardBorder: 'border-[#1a3828]', cardBg2: 'bg-[#102018]', cardBorder2: 'border-[#244830]',
+    inputBg: 'bg-[#0c1a14]', inputBorder: 'border-[#1a3828]',
+    headerBg: 'bg-[#08120e]/95', headerBorder: 'border-[#1a3828]',
+    rowBg: 'bg-[#0a1610]', rowBorder: 'border-[#1a3828]', rowHover: 'hover:bg-[#102018]',
+    dropBg: 'bg-[#0c1a14]', dropBorder: 'border-[#1a3828]',
+    barBg: 'bg-[#1a3828]', divider: 'border-[#1a3828]',
+    accent: 'text-[#50c878]', accentBg: 'bg-[#50c878]', accentBorder: 'border-[#50c878]',
+    accentMuted: 'text-[#50c878]/70', accentHover: 'hover:bg-[#66d88a]',
   },
 };
 
@@ -692,25 +704,76 @@ const App = () => {
     } catch(_) {}
   };
 
-  // Multi-factor auth: advance through steps or verify all
+  // Live countdown for rate-limit cooldown
+  useEffect(() => {
+    if (!pinAttemptInfo || pinAttemptInfo.retry_secs <= 0) return;
+    const timer = setInterval(() => {
+      setPinAttemptInfo(prev => {
+        if (!prev || prev.retry_secs <= 1) {
+          clearInterval(timer);
+          refreshPinStatus();
+          return prev ? { ...prev, retry_secs: 0 } : prev;
+        }
+        return { ...prev, retry_secs: prev.retry_secs - 1 };
+      });
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [pinAttemptInfo?.retry_secs > 0]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Multi-factor auth: verify each step immediately, retry failed step
   const handleAuthStep = async () => {
     const steps = getAuthSteps(profileSecurity);
     const currentIdx = steps.indexOf(authStep);
     const isLast = currentIdx === steps.length - 1;
 
-    // Validate current step
+    // Validate current step input
+    const currentValue = authStep === 'password' ? authInputs.password
+      : authStep === 'pin' ? authInputs.pin
+      : authInputs.totp_code;
     if (authStep === 'password' && !authInputs.password) { setPinError('Entrez votre mot de passe'); return; }
     if (authStep === 'pin' && !authInputs.pin) { setPinError('Entrez votre PIN'); return; }
     if (authStep === 'totp' && authInputs.totp_code.length !== 6) { setPinError('Entrez le code à 6 chiffres'); return; }
 
+    // Verify this factor immediately
+    try {
+      const ok = await invoke('verify_auth_factor', {
+        profileName: activeProfile,
+        factor: authStep,
+        value: currentValue,
+      });
+      if (!ok) {
+        // Failed — clear only this step's input, stay on same step
+        const key = authStep === 'password' ? 'password' : authStep === 'pin' ? 'pin' : 'totp_code';
+        setAuthInputs(prev => ({ ...prev, [key]: '' }));
+        await refreshPinStatus();
+        setPinError(authStep === 'password' ? 'Mot de passe incorrect'
+          : authStep === 'pin' ? 'Code PIN incorrect'
+          : 'Code 2FA incorrect');
+        return;
+      }
+    } catch(err) {
+      const errMsg = String(err);
+      const key = authStep === 'password' ? 'password' : authStep === 'pin' ? 'pin' : 'totp_code';
+      setAuthInputs(prev => ({ ...prev, [key]: '' }));
+      await refreshPinStatus();
+      if (errMsg.includes('verrouillé') || errMsg.includes('tentatives')) {
+        setPinError(errMsg);
+      } else {
+        setPinError(authStep === 'password' ? 'Mot de passe incorrect'
+          : authStep === 'pin' ? 'Code PIN incorrect'
+          : 'Code 2FA incorrect');
+      }
+      return;
+    }
+
+    // Factor verified — advance or finalize
     if (!isLast) {
-      // Move to next step
       setPinError('');
       setAuthStep(steps[currentIdx + 1]);
       return;
     }
 
-    // Last step — verify all factors
+    // All factors verified individually — finalize auth and derive session key
     try {
       const ok = await invoke('verify_profile_auth', {
         profileName: activeProfile,
@@ -730,10 +793,11 @@ const App = () => {
         resetInactivityTimer();
         loadCategories(); loadWallets(); loadSettings(); loadPrices();
       } else {
+        // Should not happen since individual factors passed, but handle gracefully
         setAuthInputs({ password: '', pin: '', totp_code: '' });
         setAuthStep(steps[0]);
         await refreshPinStatus();
-        setPinError('Authentification échouée');
+        setPinError('Erreur de session — réessayez');
       }
     } catch(err) {
       const errMsg = String(err);
@@ -743,7 +807,7 @@ const App = () => {
       if (errMsg.includes('verrouillé') || errMsg.includes('tentatives')) {
         setPinError(errMsg);
       } else {
-        setPinError('Authentification échouée');
+        setPinError('Erreur de session — réessayez');
       }
     }
   };
@@ -1699,6 +1763,7 @@ const App = () => {
       {theme === 'noctali' && <><NoctaliStarfield /><NoctaliMoon /><NoctaliImages /></>}
       {theme === 'lunarpunk' && <><LunarPunkDust /><LunarPunkDunes /><LunarPunkMoon /></>}
       {theme === 'solarpunk' && <><SolarpunkBackground /><SolarpunkPollen /></>}
+      {theme === 'stjude' && <><StJudePGPWatermark /><StJudeQuotes /><StJudeBanner /><StJudePortrait /></>}
       <ConfirmModal />
 
       {/* ── Bloomberg-style Price Terminal (Ctrl+Shift+P / long-press API) ── */}
@@ -1929,7 +1994,7 @@ const App = () => {
                 <span className={refreshing ? 'animate-spin' : ''}>↻</span>
               </button>
               <div>
-                <h1 className="font-bold text-xl select-none cursor-default" onClick={(e) => { if (e.detail === 3) setShowWhitepaper(true); }}>JANUS Monitor</h1>
+                <h1 className="font-bold text-xl select-none cursor-default" onClick={(e) => { if (e.detail === 3) { if (theme === 'stjude') { window.open('https://en.wikipedia.org/wiki/Jude_Milhon', '_blank'); } else { setShowWhitepaper(true); } } }}>JANUS Monitor</h1>
                 <p className={`text-xs ${T.textMuted}`}>Réserve sécurisée · <span className={T.textFaint}>v2.3</span> · <span className={T.accentMuted}>{activeProfile}</span></p>
               </div>
             </div>
@@ -1986,8 +2051,8 @@ const App = () => {
           <div className="grid gap-2 mb-2" style={{ gridTemplateColumns: '1.6fr 1fr 1fr auto' }}>
             <div className={`${T.cardBg} border rounded-lg px-3 py-2`}
               style={{
-                borderColor: theme === 'lunarpunk' ? 'rgba(109,143,248,0.3)' : theme === 'noctali' ? 'rgba(244,217,149,0.3)' : 'rgba(245,158,11,0.3)',
-                boxShadow: theme === 'lunarpunk' ? '0 0 15px rgba(109,143,248,0.06)' : theme === 'noctali' ? '0 0 15px rgba(244,217,149,0.06)' : 'none',
+                borderColor: theme === 'stjude' ? 'rgba(80,200,120,0.3)' : theme === 'lunarpunk' ? 'rgba(109,143,248,0.3)' : theme === 'noctali' ? 'rgba(244,217,149,0.3)' : 'rgba(245,158,11,0.3)',
+                boxShadow: theme === 'stjude' ? '0 0 15px rgba(80,200,120,0.06)' : theme === 'lunarpunk' ? '0 0 15px rgba(109,143,248,0.06)' : theme === 'noctali' ? '0 0 15px rgba(244,217,149,0.06)' : 'none',
               }}>
               <div className={`text-xs ${T.accentMuted}`}>Total BTC</div>
               <div className={`text-2xl font-bold tabular-nums ${T.accent}`}>{maskBalance(getTotalBtc(), 8)}</div>
@@ -2365,7 +2430,7 @@ const App = () => {
                   {/* Special Edition dropdown */}
                   <details className={`group rounded-lg border ${T.inputBorder} ${T.inputBg} overflow-hidden`}>
                     <summary className={`flex items-center justify-between px-3 py-2.5 cursor-pointer text-sm ${T.textMuted} select-none hover:opacity-80`}>
-                      <span>✨ Spécial Édition {(theme === 'noctali' || theme === 'lunarpunk' || theme === 'solarpunk') && <span className={T.accent}>●</span>}</span>
+                      <span>✨ Spécial Édition {(theme === 'noctali' || theme === 'lunarpunk' || theme === 'solarpunk' || theme === 'stjude') && <span className={T.accent}>●</span>}</span>
                       <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
                         className={`${T.textFaint} transition-transform group-open:rotate-90`}>
                         <polyline points="9 18 15 12 9 6"/>
@@ -2376,6 +2441,7 @@ const App = () => {
                         { key: 'noctali', label: '🌑 Noctali', desc: 'v1.0 — Umbreon starfield', accent: '#F4D995' },
                         { key: 'lunarpunk', label: '🔮 Lunar Punk', desc: 'v2.2 — Désert dystopique', accent: '#6d8ff8' },
                         { key: 'solarpunk', label: '🌿 Solarpunk', desc: 'v2.3 — Nature meets technology', accent: '#7BC74D' },
+                        { key: 'stjude', label: '🔑 St. Jude', desc: 'v2.3 — Cypherpunk minimal', accent: '#50c878' },
                       ].map(opt => (
                         <button key={opt.key} onClick={() => setTheme(opt.key)}
                           className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm border transition-all ${theme === opt.key

@@ -1069,7 +1069,83 @@ fn disable_totp(state: State<DbState>, profile_name: String, auth_credential: St
 }
 
 // =============================================================================
-// 🔒 UNIFIED MULTI-FACTOR AUTHENTICATION
+// 🔒 SINGLE-FACTOR STEP VERIFICATION (verify one factor at a time)
+// =============================================================================
+
+#[tauri::command]
+fn verify_auth_factor(
+    state: State<DbState>,
+    profile_name: String,
+    factor: String,   // "password" | "pin" | "totp"
+    value: String,
+) -> Result<bool, String> {
+    input_validation::validate_profile_name(&profile_name)?;
+    pin_security::check_rate_limit(&profile_name)?;
+
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+
+    let ok = match factor.as_str() {
+        "password" => {
+            let hash: Option<String> = conn.query_row(
+                "SELECT password_hash FROM profile_security WHERE profile_name = ?1",
+                params![profile_name], |row| row.get(0),
+            ).ok().flatten();
+            match hash {
+                Some(ref h) if !h.is_empty() => pin_security::verify_pin(&value, h)?,
+                _ => return Err("Aucun mot de passe configuré".to_string()),
+            }
+        }
+        "pin" => {
+            let hash: Option<String> = conn.query_row(
+                "SELECT pin_hash FROM profile_security WHERE profile_name = ?1",
+                params![profile_name], |row| row.get(0),
+            ).ok().flatten();
+            match hash {
+                Some(ref h) if !h.is_empty() => {
+                    // Legacy migration
+                    if pin_security::is_legacy_sha256_hash(h) {
+                        let legacy = sha256_hex(&value);
+                        if legacy == *h {
+                            let new_hash = pin_security::migrate_pin_hash(&value)?;
+                            conn.execute("UPDATE profile_security SET pin_hash = ?1 WHERE profile_name = ?2",
+                                params![new_hash, profile_name]).ok();
+                            true
+                        } else { false }
+                    } else {
+                        pin_security::verify_pin(&value, h)?
+                    }
+                }
+                _ => return Err("Aucun PIN configuré".to_string()),
+            }
+        }
+        "totp" => {
+            let (enc, enabled): (Option<String>, i64) = conn.query_row(
+                "SELECT totp_secret_encrypted, totp_enabled FROM profile_security WHERE profile_name = ?1",
+                params![profile_name],
+                |row| Ok((row.get(0)?, row.get::<_, i64>(1).unwrap_or(0))),
+            ).map_err(|_| "2FA non configuré".to_string())?;
+            if enabled != 1 { return Err("2FA non activé".to_string()); }
+            match enc {
+                Some(ref e) if !e.is_empty() => {
+                    let secret = totp_security::decrypt_totp_secret(e)?;
+                    totp_security::verify_totp_code(&secret, &profile_name, &value)?
+                }
+                _ => return Err("Secret 2FA manquant".to_string()),
+            }
+        }
+        _ => return Err("Facteur inconnu".to_string()),
+    };
+
+    if !ok {
+        pin_security::record_failed_attempt(&profile_name)?;
+    }
+    // NOTE: Don't reset rate limit on individual factor success.
+    // Full reset happens in verify_profile_auth after ALL factors pass.
+    Ok(ok)
+}
+
+// =============================================================================
+// 🔒 UNIFIED MULTI-FACTOR AUTHENTICATION (final step — derives session key)
 // =============================================================================
 
 #[tauri::command]
@@ -3710,7 +3786,8 @@ pub fn run() {
             setup_totp,                      // 🔒 TOTP 2FA
             enable_totp,
             disable_totp,
-            verify_profile_auth,             // 🔒 Multi-factor auth
+            verify_auth_factor,              // 🔒 Single factor step verify
+            verify_profile_auth,             // 🔒 Multi-factor final auth
             generate_new_salt,
             init_encryption_system,
             test_encryption_backend,
