@@ -60,6 +60,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a23eb6b1614318a8071c9b2521f36b424b2c83db5eb3a0fead4a6c0809af6e61"
 
 [[package]]
+name = "argon2"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3c3610892ee6e0cbce8ae2700349fcf8f98adb0dbfbee85aec3c9179d29cc072"
+dependencies = [
+ "base64ct",
+ "blake2",
+ "cpufeatures",
+ "password-hash",
+]
+
+[[package]]
 name = "atk"
 version = "0.18.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -107,6 +119,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
+name = "base64ct"
+version = "1.8.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
+
+[[package]]
 name = "bitflags"
 version = "1.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -119,6 +137,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "812e12b5285cc515a9c72a5c1d3b6d46a19dac5acfef5265968c166106e31dd3"
 dependencies = [
  "serde_core",
+]
+
+[[package]]
+name = "blake2"
+version = "0.10.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "46502ad458c9a52b69d4d4d32775c788b7a1b85e8bc9d482d92250fc0e3f8efe"
+dependencies = [
+ "digest",
 ]
 
 [[package]]
@@ -533,6 +560,7 @@ checksum = "9ed9a281f7bc9b7576e61468ba615a66a5c8cfdff42420a70aa82701a3b1e292"
 dependencies = [
  "block-buffer",
  "crypto-common",
+ "subtle",
 ]
 
 [[package]]
@@ -662,6 +690,15 @@ name = "dyn-clone"
 version = "1.0.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
+
+[[package]]
+name = "ed25519"
+version = "1.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "91cff35c70bba8a626e3185d8cd48cc11b5437e1a5bcd15b9b5fa3c64b6dfee7"
+dependencies = [
+ "signature",
+]
 
 [[package]]
 name = "embed-resource"
@@ -1655,17 +1692,23 @@ checksum = "92ecc6618181def0457392ccd0ee51198e065e016d1d527a7ac1b6dc7c1f09d2"
 
 [[package]]
 name = "janus-monitor"
-version = "2.0.0"
+version = "2.2.0"
 dependencies = [
+ "argon2",
  "chrono",
  "dirs 5.0.1",
+ "hex",
+ "lazy_static",
+ "once_cell",
  "reqwest 0.11.27",
  "rusqlite",
  "serde",
  "serde_json",
+ "sodiumoxide",
  "tauri",
  "tauri-build",
  "tauri-plugin-shell",
+ "thiserror 1.0.69",
  "tokio",
 ]
 
@@ -1823,6 +1866,18 @@ checksum = "3d0b95e02c851351f877147b7deea7b1afb1df71b63aa5f8270716e0c5720616"
 dependencies = [
  "bitflags 2.10.0",
  "libc",
+]
+
+[[package]]
+name = "libsodium-sys"
+version = "0.2.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6b779387cd56adfbc02ea4a668e704f729be8d6a6abd2c27ca5ee537849a92fd"
+dependencies = [
+ "cc",
+ "libc",
+ "pkg-config",
+ "walkdir",
 ]
 
 [[package]]
@@ -2395,6 +2450,17 @@ dependencies = [
  "redox_syscall",
  "smallvec",
  "windows-link 0.2.1",
+]
+
+[[package]]
+name = "password-hash"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "346f04948ba92c43e8469c1ee6736c7563d71012b17d40745260fe106aac2166"
+dependencies = [
+ "base64ct",
+ "rand_core 0.6.4",
+ "subtle",
 ]
 
 [[package]]
@@ -3363,6 +3429,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "signature"
+version = "1.6.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "74233d3b3b2f6d4b006dc19dee745e73e2a6bfb6f93607cd3b02bd5b00797d7c"
+
+[[package]]
 name = "simd-adler32"
 version = "0.3.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3410,6 +3482,18 @@ checksum = "86f4aa3ad99f2088c990dfa82d367e19cb29268ed67c574d10d0a4bfe71f07e0"
 dependencies = [
  "libc",
  "windows-sys 0.60.2",
+]
+
+[[package]]
+name = "sodiumoxide"
+version = "0.2.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e26be3acb6c2d9a7aac28482586a7856436af4cfe7100031d219de2d2ecb0028"
+dependencies = [
+ "ed25519",
+ "libc",
+ "libsodium-sys",
+ "serde",
 ]
 
 [[package]]
@@ -3496,6 +3580,12 @@ name = "strsim"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
+
+[[package]]
+name = "subtle"
+version = "2.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "swift-rs"

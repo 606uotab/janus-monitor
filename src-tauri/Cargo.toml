@@ -1,6 +1,6 @@
 [package]
 name = "janus-monitor"
-version = "2.0.0"
+version = "2.2.0"
 description = "JANUS Strategy - Crypto Reserve Monitor"
 authors = ["JANUS"]
 edition = "2021"
@@ -22,6 +22,16 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 reqwest = { version = "0.11", features = ["json", "blocking"] }
 tokio = { version = "1", features = ["full"] }
 dirs = "5"
+
+# Security: Cryptography dependencies
+sodiumoxide = "0.2"  # Modern crypto library (libsodium bindings)
+argon2 = { version = "0.5", features = ["std"] }  # Password hashing
+hex = "0.4"  # For key serialization
+lazy_static = "1.4"  # For static initialization
+once_cell = "1.19"  # For once-cell initialization
+
+# Monero integration
+thiserror = "1.0"  # For custom error types
 
 [profile.release]
 panic = "abort"

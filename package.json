@@ -1,16 +1,22 @@
 {
   "name": "janus-monitor",
-  "version": "2.0.0",
+  "version": "2.2.0",
   "description": "JANUS Strategy - Crypto Reserve Monitor",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "security:audit": "node scripts/dependency-management.mjs check",
+    "security:update": "node scripts/dependency-management.mjs update",
+    "security:report": "node scripts/dependency-management.mjs generate",
+    "security:full": "npm run security:audit && npm run security:update && npm run security:report"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",
+    "axios": "^1.13.5",
+    "js-yaml": "^4.1.1",
     "qrcode.react": "^4.2.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0"
