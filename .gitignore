@@ -26,6 +26,10 @@ npm-debug.log*
 # Tauri
 src-tauri/target/
 
+# Android signing
+*.keystore
+*.jks
+
 # ── Security Patch v2.2.1 ──
 *.backup
 *.before_fix

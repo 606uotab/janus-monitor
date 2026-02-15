@@ -15,10 +15,7 @@ impl SecureKeyStorage {
     pub fn new() -> Result<Self, String> {
         sodiumoxide::init().map_err(|_| "sodiumoxide init failed".to_string())?;
 
-        let data_dir = dirs::data_local_dir()
-            .ok_or_else(|| "Cannot determine data directory".to_string())?
-            .join("janus-monitor")
-            .join("security");
+        let data_dir = crate::get_data_base_dir().join("security");
 
         std::fs::create_dir_all(&data_dir)
             .map_err(|e| format!("Failed to create security directory: {}", e))?;

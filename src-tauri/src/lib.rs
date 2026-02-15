@@ -1,11 +1,26 @@
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
+use std::sync::OnceLock;
 use tauri::State;
+use tauri::Manager;
 use sodiumoxide::crypto::secretbox;
 use hex;
 use lazy_static::lazy_static;
 use reqwest;
+
+// Global data directory — set from Tauri in setup(), used by get_db_path/get_profiles_dir/secure_key_storage
+static DATA_DIR: OnceLock<std::path::PathBuf> = OnceLock::new();
+
+fn get_data_base_dir() -> std::path::PathBuf {
+    if let Some(dir) = DATA_DIR.get() {
+        dir.clone()
+    } else {
+        dirs::data_local_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .join("janus-monitor")
+    }
+}
 
 // Session encryption key state — derived from PIN on unlock, cleared on lock
 pub struct SessionKeyState(pub Mutex<Option<Vec<u8>>>);
@@ -1680,9 +1695,7 @@ pub struct DbState(pub Mutex<Connection>);
 // 
 
 fn get_db_path() -> String {
-    let data_dir = dirs::data_local_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join("janus-monitor");
+    let data_dir = get_data_base_dir();
     std::fs::create_dir_all(&data_dir).ok();
     // Set directory permissions to 0700 (owner only)
     #[cfg(unix)]
@@ -3361,10 +3374,7 @@ async fn fetch_balance(state: State<'_, DbState>, asset: String, address: String
 // 
 
 fn get_profiles_dir() -> std::path::PathBuf {
-    let dir = dirs::data_local_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join("janus-monitor")
-        .join("profiles");
+    let dir = get_data_base_dir().join("profiles");
     std::fs::create_dir_all(&dir).ok();
     // Set profiles directory permissions to 0700 (owner only)
     #[cfg(unix)]
@@ -3715,33 +3725,39 @@ fn has_session_key(session_key: State<SessionKeyState>) -> Result<bool, String> 
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let db_path = get_db_path();
-    let conn = Connection::open(&db_path).expect("Impossible d'ouvrir la base de données");
-    init_db(&conn).expect("Impossible d'initialiser la base de données");
-
-    // Charger le setting monitoring_enabled
-    let monitoring_enabled = conn
-    .query_row(
-        "SELECT value FROM settings WHERE key = 'monitoring_enabled'",
-        [],
-        |row| row.get::<_, String>(0),
-    )
-    .unwrap_or("true".to_string()) == "true";
-
-    // Créer l'état de monitoring
-    let monitoring_state = Arc::new(TokioMutex::new(MonitoringState {
-        enabled: monitoring_enabled,
-        ..Default::default()
-    }));
-
     tauri::Builder::default()
     .plugin(tauri_plugin_shell::init())
-    .manage(DbState(Mutex::new(conn)))
     .manage(SessionKeyState(Mutex::new(None)))  // 🔒 Session encryption key
-    .manage(monitoring_state.clone())  // ✨ NOUVEAU
     .setup(move |app| {
+        // Set data directory from Tauri (works on all platforms including Android)
+        if let Ok(dir) = app.path().app_local_data_dir() {
+            DATA_DIR.set(dir).ok();
+        }
+
+        let db_path = get_db_path();
+        let conn = Connection::open(&db_path).expect("Impossible d'ouvrir la base de données");
+        init_db(&conn).expect("Impossible d'initialiser la base de données");
+
+        // Charger le setting monitoring_enabled
+        let monitoring_enabled = conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'monitoring_enabled'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap_or("true".to_string()) == "true";
+
+        // Créer l'état de monitoring
+        let monitoring_state = Arc::new(TokioMutex::new(MonitoringState {
+            enabled: monitoring_enabled,
+            ..Default::default()
+        }));
+
+        app.manage(DbState(Mutex::new(conn)));
+        app.manage(monitoring_state.clone());
+
         // Démarrer la tâche de monitoring
-        start_monitoring_task(monitoring_state.clone(), app.handle().clone(), std::path::PathBuf::from(db_path.clone()));
+        start_monitoring_task(monitoring_state, app.handle().clone(), std::path::PathBuf::from(db_path));
         Ok(())
     })
     .invoke_handler(tauri::generate_handler![
