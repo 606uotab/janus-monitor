@@ -1,5 +1,36 @@
 # Changelog
 
+## [2.3.0] — 2026-02-15
+
+### 2FA TOTP Authentication
+- Authentification a deux facteurs via TOTP (RFC 6238)
+- Compatible Google Authenticator, Authy, Microsoft Authenticator
+- QR code pour configuration rapide + cle manuelle en fallback
+- Secret TOTP chiffre au repos avec cle app-level (libsodium secretbox)
+- Tolerance +-1 fenetre (90 secondes) pour decalages d'horloge
+
+### Multi-Factor Authentication
+- Nouveau facteur : mot de passe (min 8 caracteres, Argon2id)
+- Combinaisons flexibles : mot de passe seul, PIN seul, MDP + PIN, MDP + 2FA, PIN + 2FA, MDP + PIN + 2FA
+- Ecran de verrouillage multi-etapes avec indicateur de progression (dots vert/amber/gris)
+- Commande unifiee `verify_profile_auth` qui verifie tous les facteurs en une transaction
+- Session key derivee uniquement apres validation de tous les facteurs
+- Rate limiting partage entre tous les facteurs (10 echecs = lockout 15min)
+
+### Security Settings UI
+- Panneau securite reorganise en 3 blocs : Mot de passe / PIN / 2FA
+- Indicateur d'etat par facteur (vert = actif, gris = inactif)
+- Modal de configuration TOTP avec QR code integre
+- Bouton 2FA desactive si aucun PIN/mot de passe configure
+
+### Backend
+- Nouveau module `totp_security.rs` (generation, verification, chiffrement)
+- Migration DB automatique v2.2 → v2.3 (colonnes password_hash, totp_secret_encrypted, totp_enabled)
+- 6 nouvelles commandes Tauri : set_profile_password, remove_profile_password, setup_totp, enable_totp, disable_totp, verify_profile_auth
+- Dependance `totp-rs` v5 avec feature `otpauth`
+
+---
+
 ## [2.2.1] — 2026-02-15
 
 ### Solarpunk Theme (Special Edition)

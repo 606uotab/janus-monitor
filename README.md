@@ -1,11 +1,11 @@
-# JANUS Monitor v2.2.1
+# JANUS Monitor v2.3.0
 
 Application de bureau pour suivre en temps réel un portefeuille crypto selon la stratégie JANUS : **85 % Bitcoin** en réserve de valeur, **15 % diversification** entre hedging et altcoins.
 
 ![Tauri](https://img.shields.io/badge/Tauri%202-Rust%20%2B%20React-blue)
 ![Platform](https://img.shields.io/badge/Platform-Linux%20Debian-orange)
-![Version](https://img.shields.io/badge/Version-2.2.1-green)
-![Security](https://img.shields.io/badge/Security-Argon2id%20%2B%20libsodium-red)
+![Version](https://img.shields.io/badge/Version-2.3.0-green)
+![Security](https://img.shields.io/badge/Security-Argon2id%20%2B%20TOTP%20%2B%20libsodium-red)
 
 ---
 
@@ -31,14 +31,17 @@ Application de bureau pour suivre en temps réel un portefeuille crypto selon la
 - Barre de recherche de tokens intégrée par catégorie
 - Template par défaut JANUS (85/7/5) chargé au premier lancement
 
-### Sécurité *(v2.0 + renforcée v2.2.1)*
-- Protection par PIN / mot de passe au démarrage
+### Sécurité *(v2.0 + 2FA v2.3)*
+- **Authentification multi-facteurs** : mot de passe + PIN + 2FA (TOTP) combinables
+- **2FA TOTP** : compatible Google Authenticator, Authy, Microsoft Authenticator
 - Hashage Argon2id (pas de stockage en clair)
 - Chiffrement des logs sensibles via libsodium (secretbox)
+- Secret TOTP chiffré au repos avec clé app-level
 - Validation stricte de toutes les entrées (adresses, noms, profils)
 - Verrouillage automatique après inactivité configurable
-- Démarrage sécurisé : profil `default_template` vierge (thème sombre, aucun wallet chargé)
-- Le thème et les données ne sont jamais affichés avant l'authentification
+- Ecran de verrouillage multi-etapes avec indicateur de progression
+- Demarrage securise : profil `default_template` vierge (theme sombre, aucun wallet charge)
+- Le theme et les donnees ne sont jamais affiches avant l'authentification
 
 ### Historique blockchain *(v2.0)*
 - Récupération des 10 dernières transactions par wallet
@@ -63,7 +66,7 @@ Application de bureau pour suivre en temps réel un portefeuille crypto selon la
 | Sépia | Standard | Tons chauds parchemin |
 | Noctali | Special Edition v1.0 | Ultra-sombre, voie lactée animée, croissant de lune plasma, illustrations Umbreon |
 | Lunar Punk | Special Edition v2.2 | Désert dystopique, dunes violettes ondulantes, ruines de cité, dômes-abris, lune plasma, poussière cosmique |
-| Solarpunk | Special Edition v2.2.1 | Fond JPEG Art Nouveau avec ville cyberpunk en ombre floue, collines verdoyantes, pollen doré animé |
+| Solarpunk | Special Edition v2.3.0 | Fond JPEG Art Nouveau avec ville cyberpunk en ombre floue, collines verdoyantes, pollen doré animé |
 
 ### Intégrations blockchain *(v2.2)*
 - **Monero (XMR)** — Intégration noeud RPC (view key + spend key), saisie manuelle, prix Bitfinex
@@ -109,14 +112,14 @@ Application de bureau pour suivre en temps réel un portefeuille crypto selon la
 ### Depuis une release (.deb)
 
 ```bash
-sudo dpkg -i janus-monitor_2.2.1_amd64.deb
+sudo dpkg -i janus-monitor_2.3.0_amd64.deb
 ```
 
 ### Depuis une release (AppImage)
 
 ```bash
-chmod +x janus-monitor_2.2.1_amd64.AppImage
-./janus-monitor_2.2.1_amd64.AppImage
+chmod +x janus-monitor_2.3.0_amd64.AppImage
+./janus-monitor_2.3.0_amd64.AppImage
 ```
 
 > L'AppImage ne nécessite aucune installation. Il suffit de le rendre exécutable et de le lancer.
@@ -125,11 +128,11 @@ chmod +x janus-monitor_2.2.1_amd64.AppImage
 
 ## Mise à jour depuis une version antérieure
 
-### Mise à jour .deb (v1.x / v2.x → v2.2.1)
+### Mise à jour .deb (v1.x / v2.x → v2.3.0)
 
 ```bash
 # Le .deb remplace automatiquement l'ancienne version
-sudo dpkg -i janus-monitor_2.2.1_amd64.deb
+sudo dpkg -i janus-monitor_2.3.0_amd64.deb
 ```
 
 Vos données (profils, wallets, catégories) sont conservées automatiquement — elles sont stockées dans le répertoire de données Tauri (`~/.local/share/com.janus.monitor/`) et ne sont pas touchées par la mise à jour du paquet.
@@ -141,8 +144,8 @@ Vos données (profils, wallets, catégories) sont conservées automatiquement �
 rm janus-monitor_*_amd64.AppImage
 
 # 2. Rendre le nouveau exécutable et lancer
-chmod +x janus-monitor_2.2.1_amd64.AppImage
-./janus-monitor_2.2.1_amd64.AppImage
+chmod +x janus-monitor_2.3.0_amd64.AppImage
+./janus-monitor_2.3.0_amd64.AppImage
 ```
 
 ### Mise à jour depuis les sources (git pull)
@@ -223,22 +226,22 @@ Cette commande produit deux fichiers dans `src-tauri/target/release/bundle/` :
 
 | Format | Chemin | Usage |
 |--------|--------|-------|
-| **AppImage** | `bundle/appimage/janus-monitor_2.2.1_amd64.AppImage` | Exécutable portable, aucune installation requise |
-| **Debian (.deb)** | `bundle/deb/janus-monitor_2.2.1_amd64.deb` | Installation système via `dpkg -i` |
+| **AppImage** | `bundle/appimage/janus-monitor_2.3.0_amd64.AppImage` | Exécutable portable, aucune installation requise |
+| **Debian (.deb)** | `bundle/deb/janus-monitor_2.3.0_amd64.deb` | Installation système via `dpkg -i` |
 
 > **Note** : Le build release active LTO (Link-Time Optimization), strip des symboles et optimise la taille du binaire. La première compilation peut prendre plusieurs minutes.
 
 ### Installer le .deb local après build
 
 ```bash
-sudo dpkg -i src-tauri/target/release/bundle/deb/janus-monitor_2.2.1_amd64.deb
+sudo dpkg -i src-tauri/target/release/bundle/deb/janus-monitor_2.3.0_amd64.deb
 ```
 
 ### Lancer l'AppImage après build
 
 ```bash
-chmod +x src-tauri/target/release/bundle/appimage/janus-monitor_2.2.1_amd64.AppImage
-./src-tauri/target/release/bundle/appimage/janus-monitor_2.2.1_amd64.AppImage
+chmod +x src-tauri/target/release/bundle/appimage/janus-monitor_2.3.0_amd64.AppImage
+./src-tauri/target/release/bundle/appimage/janus-monitor_2.3.0_amd64.AppImage
 ```
 
 ### Désinstaller
@@ -259,7 +262,7 @@ sudo dpkg -r janus-monitor
 | Base de données | SQLite (rusqlite) |
 | HTTP | reqwest (async) |
 | Prix | Binance API + Bitfinex (XMR, XAUT) |
-| Sécurité | Argon2id (PIN hashing) + libsodium/sodiumoxide (chiffrement logs) |
+| Sécurité | Argon2id (PIN/password) + TOTP 2FA (totp-rs) + libsodium (chiffrement) |
 | Distribution | AppImage + .deb (Debian/Ubuntu) |
 
 ---
@@ -280,12 +283,13 @@ janus-monitor/
 │       ├── index.js                  # Barrel exports
 │       ├── NoctaliTheme.jsx          # Thème Noctali (v1.0) — Umbreon starfield
 │       ├── LunarPunkTheme.jsx        # Thème Lunar Punk (v2.2) — Désert dystopique
-│       └── SolarpunkTheme.jsx        # Thème Solarpunk (v2.2.1) — Nature meets technology
+│       └── SolarpunkTheme.jsx        # Thème Solarpunk (v2.3.0) — Nature meets technology
 ├── src-tauri/
 │   └── src/
 │       ├── main.rs                   # Point d'entrée Tauri
 │       ├── lib.rs                    # Backend principal (commandes, API, DB)
 │       ├── pin_security.rs           # Hashage PIN Argon2id
+│       ├── totp_security.rs          # 2FA TOTP (generation, verification, chiffrement)
 │       ├── input_validation.rs       # Validation des entrées
 │       ├── secure_key_storage.rs     # Stockage de clés chiffré
 │       ├── monero_integration.rs     # Intégration noeud Monero RPC

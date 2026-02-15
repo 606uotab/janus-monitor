@@ -169,11 +169,11 @@ const App = () => {
   const [moneroTestResult, setMoneroTestResult] = useState(null);
   const [moneroNodeStatus, setMoneroNodeStatus] = useState({});
 
-  // ── PIN / Lock ──
+  // ── PIN / Lock / Multi-factor Auth ──
   const [isLocked, setIsLocked] = useState(false);
   const [pinInput, setPinInput] = useState('');
   const [pinError, setPinError] = useState('');
-  const [profileSecurity, setProfileSecurity] = useState({ has_pin: false, inactivity_minutes: 0 });
+  const [profileSecurity, setProfileSecurity] = useState({ has_pin: false, has_password: false, has_totp: false, inactivity_minutes: 0 });
   const inactivityTimerRef = useRef(null);
   const inactivityWarningRef = useRef(null);
   const [showInactivityWarning, setShowInactivityWarning] = useState(false);
@@ -184,6 +184,13 @@ const App = () => {
   const [pinModalConfirm, setPinModalConfirm] = useState('');
   const [pinModalError, setPinModalError] = useState('');
   const [showAdvancedSecurity, setShowAdvancedSecurity] = useState(false);
+  // Multi-factor auth state
+  const [authStep, setAuthStep] = useState(null); // 'password' | 'pin' | 'totp'
+  const [authInputs, setAuthInputs] = useState({ password: '', pin: '', totp_code: '' });
+  // TOTP setup
+  const [totpSetupData, setTotpSetupData] = useState(null); // { uri, secret }
+  const [totpVerifyCode, setTotpVerifyCode] = useState('');
+  const [totpSetupError, setTotpSetupError] = useState('');
   const [etherscanApiKey, setEtherscanApiKey] = useState('');
   const [encryptedApiKey, setEncryptedApiKey] = useState(null);
   const [apiKeySalt, setApiKeySalt] = useState(null);
@@ -649,6 +656,15 @@ const App = () => {
     }
   };
 
+  // Build ordered list of auth steps from security config
+  const getAuthSteps = (sec) => {
+    const steps = [];
+    if (sec.has_password) steps.push('password');
+    if (sec.has_pin) steps.push('pin');
+    if (sec.has_totp) steps.push('totp');
+    return steps;
+  };
+
   const loadProfileSecurity = async (profileName, shouldLock = true) => {
     try {
       const sec = await invoke('get_profile_security', { profileName });
@@ -656,13 +672,17 @@ const App = () => {
       setPinInput('');
       setPinError('');
       setPinAttemptInfo(null);
-      if (shouldLock && sec.has_pin) {
+      setAuthInputs({ password: '', pin: '', totp_code: '' });
+      const hasAnyAuth = sec.has_pin || sec.has_password || sec.has_totp;
+      if (shouldLock && hasAnyAuth) {
         setIsLocked(true);
-        setTheme('dark'); // Force neutral theme while locked — hide profile identity
+        const steps = getAuthSteps(sec);
+        setAuthStep(steps.length > 0 ? steps[0] : null);
+        setTheme('dark');
       } else {
-        setTheme(savedThemeRef.current); // No PIN — apply saved theme
+        setTheme(savedThemeRef.current);
       }
-    } catch(_) { setProfileSecurity({ has_pin: false, inactivity_minutes: 0 }); setTheme(savedThemeRef.current); }
+    } catch(_) { setProfileSecurity({ has_pin: false, has_password: false, has_totp: false, inactivity_minutes: 0 }); setTheme(savedThemeRef.current); }
   };
 
   const refreshPinStatus = async () => {
@@ -672,6 +692,63 @@ const App = () => {
     } catch(_) {}
   };
 
+  // Multi-factor auth: advance through steps or verify all
+  const handleAuthStep = async () => {
+    const steps = getAuthSteps(profileSecurity);
+    const currentIdx = steps.indexOf(authStep);
+    const isLast = currentIdx === steps.length - 1;
+
+    // Validate current step
+    if (authStep === 'password' && !authInputs.password) { setPinError('Entrez votre mot de passe'); return; }
+    if (authStep === 'pin' && !authInputs.pin) { setPinError('Entrez votre PIN'); return; }
+    if (authStep === 'totp' && authInputs.totp_code.length !== 6) { setPinError('Entrez le code à 6 chiffres'); return; }
+
+    if (!isLast) {
+      // Move to next step
+      setPinError('');
+      setAuthStep(steps[currentIdx + 1]);
+      return;
+    }
+
+    // Last step — verify all factors
+    try {
+      const ok = await invoke('verify_profile_auth', {
+        profileName: activeProfile,
+        authAttempt: {
+          password: authInputs.password || null,
+          pin: authInputs.pin || null,
+          totp_code: authInputs.totp_code || null,
+        }
+      });
+      if (ok) {
+        setIsLocked(false);
+        setAuthInputs({ password: '', pin: '', totp_code: '' });
+        setPinInput('');
+        setPinError('');
+        setPinAttemptInfo(null);
+        setTheme(savedThemeRef.current);
+        resetInactivityTimer();
+        loadCategories(); loadWallets(); loadSettings(); loadPrices();
+      } else {
+        setAuthInputs({ password: '', pin: '', totp_code: '' });
+        setAuthStep(steps[0]);
+        await refreshPinStatus();
+        setPinError('Authentification échouée');
+      }
+    } catch(err) {
+      const errMsg = String(err);
+      setAuthInputs({ password: '', pin: '', totp_code: '' });
+      setAuthStep(steps[0]);
+      await refreshPinStatus();
+      if (errMsg.includes('verrouillé') || errMsg.includes('tentatives')) {
+        setPinError(errMsg);
+      } else {
+        setPinError('Authentification échouée');
+      }
+    }
+  };
+
+  // Legacy single-PIN unlock (kept for backward compat with old profiles)
   const handleUnlock = async () => {
     if (!pinInput || pinInput.length === 0) { setPinError('Entrez votre PIN'); return; }
     try {
@@ -681,13 +758,9 @@ const App = () => {
         setPinInput('');
         setPinError('');
         setPinAttemptInfo(null);
-        setTheme(savedThemeRef.current); // Restore profile theme after unlock
+        setTheme(savedThemeRef.current);
         resetInactivityTimer();
-        // Reload data after unlock
-        loadCategories();
-        loadWallets();
-        loadSettings();
-        loadPrices();
+        loadCategories(); loadWallets(); loadSettings(); loadPrices();
       } else {
         setPinInput('');
         await refreshPinStatus();
@@ -697,11 +770,8 @@ const App = () => {
       const errMsg = String(err);
       setPinInput('');
       await refreshPinStatus();
-      if (errMsg.includes('verrouillé') || errMsg.includes('tentatives')) {
-        setPinError(errMsg);
-      } else {
-        setPinError('Erreur vérification');
-      }
+      if (errMsg.includes('verrouillé') || errMsg.includes('tentatives')) { setPinError(errMsg); }
+      else { setPinError('Erreur vérification'); }
     }
   };
 
@@ -723,7 +793,8 @@ const App = () => {
     if (inactivityTimerRef.current) clearTimeout(inactivityTimerRef.current);
     if (inactivityWarningRef.current) clearTimeout(inactivityWarningRef.current);
     setShowInactivityWarning(false);
-    if (profileSecurity.has_pin && profileSecurity.inactivity_minutes > 0 && !isLocked) {
+    const hasAnyAuth = profileSecurity.has_pin || profileSecurity.has_password || profileSecurity.has_totp;
+    if (hasAnyAuth && profileSecurity.inactivity_minutes > 0 && !isLocked) {
       const totalMs = profileSecurity.inactivity_minutes * 60 * 1000;
       const warningMs = Math.max(totalMs - 30000, totalMs * 0.8); // 30s before or 80% whichever is later
       inactivityWarningRef.current = setTimeout(() => {
@@ -731,16 +802,20 @@ const App = () => {
       }, warningMs);
       inactivityTimerRef.current = setTimeout(() => {
         setIsLocked(true);
-        setTheme('dark'); // Hide profile theme on lock
+        setTheme('dark');
         clearSensitiveState();
         setShowInactivityWarning(false);
+        setAuthInputs({ password: '', pin: '', totp_code: '' });
+        const steps = getAuthSteps(profileSecurity);
+        setAuthStep(steps[0] || null);
       }, totalMs);
     }
   };
 
   // ── Inactivity detection ──
   useEffect(() => {
-    if (!profileSecurity.has_pin || profileSecurity.inactivity_minutes === 0 || isLocked) return;
+    const hasAnyAuth = profileSecurity.has_pin || profileSecurity.has_password || profileSecurity.has_totp;
+    if (!hasAnyAuth || profileSecurity.inactivity_minutes === 0 || isLocked) return;
     const events = ['mousedown', 'keydown', 'scroll', 'touchstart'];
     const handler = () => resetInactivityTimer();
     events.forEach(e => document.addEventListener(e, handler, { passive: true }));
@@ -859,12 +934,16 @@ const App = () => {
       if (result?.theme) savedThemeRef.current = result.theme;
       try { await invoke('set_setting', { key: 'last_profile', value: name }); } catch(e) {}
       // Check security BEFORE loading sensitive data
-      const sec = await invoke('get_profile_security', { profileName: name }).catch(() => ({ has_pin: false, inactivity_minutes: 0 }));
+      const sec = await invoke('get_profile_security', { profileName: name }).catch(() => ({ has_pin: false, has_password: false, has_totp: false, inactivity_minutes: 0 }));
       setProfileSecurity(sec);
-      if (sec.has_pin) {
+      const hasAuth = sec.has_pin || sec.has_password || sec.has_totp;
+      if (hasAuth) {
         setIsLocked(true);
         setTheme('dark');
         setWallets([]);
+        setAuthInputs({ password: '', pin: '', totp_code: '' });
+        const steps = getAuthSteps(sec);
+        setAuthStep(steps[0] || null);
         showToast(`Profil "${name}" — déverrouillage requis`);
       } else {
         setTheme(savedThemeRef.current);
@@ -1851,7 +1930,7 @@ const App = () => {
               </button>
               <div>
                 <h1 className="font-bold text-xl select-none cursor-default" onClick={(e) => { if (e.detail === 3) setShowWhitepaper(true); }}>JANUS Monitor</h1>
-                <p className={`text-xs ${T.textMuted}`}>Réserve sécurisée · <span className={T.textFaint}>v2.2.1</span> · <span className={T.accentMuted}>{activeProfile}</span></p>
+                <p className={`text-xs ${T.textMuted}`}>Réserve sécurisée · <span className={T.textFaint}>v2.3</span> · <span className={T.accentMuted}>{activeProfile}</span></p>
               </div>
             </div>
             <div className="flex items-center gap-2">
@@ -2184,17 +2263,21 @@ const App = () => {
                 <div className="text-left flex-1">
                   <div className="font-medium">Sécurité</div>
                   <div className={`text-xs ${T.textFaint}`}>
-                    {profileSecurity.has_pin ? (
-                      encryptionSalt ? 'PIN actif • Chiffrement actif' : 'PIN actif'
-                    ) : 'Non protégé'}
+                    {(() => {
+                      const parts = [];
+                      if (profileSecurity.has_password) parts.push('MDP');
+                      if (profileSecurity.has_pin) parts.push('PIN');
+                      if (profileSecurity.has_totp) parts.push('2FA');
+                      return parts.length > 0 ? parts.join(' + ') + ' actif' : 'Non protégé';
+                    })()}
                   </div>
                 </div>
                 <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={T.textFaint}>
                   <polyline points="9 18 15 12 9 6"/>
                 </svg>
               </button>
-              {profileSecurity.has_pin && (
-                <button onClick={() => { setShowMenuDrawer(false); setIsLocked(true); setTheme('dark'); clearSensitiveState(); setPinInput(''); }}
+              {(profileSecurity.has_pin || profileSecurity.has_password) && (
+                <button onClick={() => { setShowMenuDrawer(false); setIsLocked(true); setTheme('dark'); clearSensitiveState(); setAuthInputs({ password: '', pin: '', totp_code: '' }); const s = getAuthSteps(profileSecurity); setAuthStep(s[0] || null); }}
                   className={`w-full px-4 py-3 ${T.inputBg} rounded-lg text-sm border border-amber-500/20 transition-colors hover:border-amber-500/40 flex items-center gap-3`}>
                   <span className="text-base">🔐</span>
                   <div className="text-left flex-1"><div className="font-medium text-amber-500">Verrouiller maintenant</div></div>
@@ -2292,7 +2375,7 @@ const App = () => {
                       {[
                         { key: 'noctali', label: '🌑 Noctali', desc: 'v1.0 — Umbreon starfield', accent: '#F4D995' },
                         { key: 'lunarpunk', label: '🔮 Lunar Punk', desc: 'v2.2 — Désert dystopique', accent: '#6d8ff8' },
-                        { key: 'solarpunk', label: '🌿 Solarpunk', desc: 'v2.2.1 — Nature meets technology', accent: '#7BC74D' },
+                        { key: 'solarpunk', label: '🌿 Solarpunk', desc: 'v2.3 — Nature meets technology', accent: '#7BC74D' },
                       ].map(opt => (
                         <button key={opt.key} onClick={() => setTheme(opt.key)}
                           className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm border transition-all ${theme === opt.key
@@ -2371,161 +2454,215 @@ const App = () => {
           {menuView === 'security' && (
             <div className="flex-1 flex flex-col overflow-auto">
               <div className="space-y-5 flex-1">
-                {/* Current status */}
-                <div className={`flex items-center gap-3 px-3 py-3 rounded-lg border ${profileSecurity.has_pin ? 'border-green-500/30 bg-green-500/5' : `${T.inputBorder} ${T.inputBg}`}`}>
-                  <span className="text-lg">{profileSecurity.has_pin ? '🔒' : '🔓'}</span>
-                  <div className="flex-1">
-                    <div className={`text-sm font-medium ${profileSecurity.has_pin ? 'text-green-500' : T.textMuted}`}>
-                      {profileSecurity.has_pin ? 'Profil protégé' : 'Profil non protégé'}
+                {/* Current status — factor indicators */}
+                <div className={`px-3 py-3 rounded-lg border ${(profileSecurity.has_pin || profileSecurity.has_password || profileSecurity.has_totp) ? 'border-green-500/30 bg-green-500/5' : `${T.inputBorder} ${T.inputBg}`}`}>
+                  <div className="flex items-center gap-3 mb-2">
+                    <span className="text-lg">{(profileSecurity.has_pin || profileSecurity.has_password) ? '🔒' : '🔓'}</span>
+                    <div className="flex-1">
+                      <div className={`text-sm font-medium ${(profileSecurity.has_pin || profileSecurity.has_password) ? 'text-green-500' : T.textMuted}`}>
+                        {(profileSecurity.has_pin || profileSecurity.has_password) ? 'Profil protégé' : 'Profil non protégé'}
+                      </div>
+                      <div className={`text-xs ${T.textFaint}`}>{activeProfile}</div>
                     </div>
-                    <div className={`text-xs ${T.textFaint}`}>{activeProfile}</div>
                   </div>
-                  {profileSecurity.has_pin && encryptionSalt && (
-                    <span className="text-xs text-green-500/70 px-2 py-0.5 rounded border border-green-500/20 bg-green-500/5">AES-256</span>
+                  <div className="flex gap-4 mt-2">
+                    <div className="flex items-center gap-1.5 text-xs">
+                      <div className={`w-2 h-2 rounded-full ${profileSecurity.has_password ? 'bg-green-500' : 'bg-zinc-600'}`} />
+                      <span className={T.textMuted}>Mot de passe</span>
+                    </div>
+                    <div className="flex items-center gap-1.5 text-xs">
+                      <div className={`w-2 h-2 rounded-full ${profileSecurity.has_pin ? 'bg-green-500' : 'bg-zinc-600'}`} />
+                      <span className={T.textMuted}>PIN</span>
+                    </div>
+                    <div className="flex items-center gap-1.5 text-xs">
+                      <div className={`w-2 h-2 rounded-full ${profileSecurity.has_totp ? 'bg-green-500' : 'bg-zinc-600'}`} />
+                      <span className={T.textMuted}>2FA</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* ── Password factor ── */}
+                <div className={`p-3 rounded-lg border ${T.inputBorder} ${T.inputBg}`}>
+                  <div className={`text-xs font-medium ${T.textMuted} mb-2`}>Mot de passe</div>
+                  {profileSecurity.has_password ? (
+                    <div className="flex gap-2">
+                      <button onClick={() => { setPinModal({ mode: 'setup', onConfirm: async (pwd) => {
+                        await invoke('set_profile_password', { profileName: activeProfile, rawPassword: pwd });
+                        const sec = await invoke('get_profile_security', { profileName: activeProfile });
+                        setProfileSecurity(sec);
+                        showToast('Mot de passe modifié');
+                      }, title: 'Changer le mot de passe', minLength: 8, placeholder: 'Nouveau mot de passe (min 8 car.)' }); }}
+                        className={`flex-1 px-3 py-2 rounded-lg text-xs border ${T.inputBorder} ${T.textMuted} hover:border-amber-500/30`}>
+                        Changer
+                      </button>
+                      <button onClick={async () => {
+                        if (!await showConfirm('Supprimer le mot de passe ?')) return;
+                        setPinModal({ mode: 'confirm', onConfirm: async (pwd) => {
+                          await invoke('remove_profile_password', { profileName: activeProfile, currentPassword: pwd });
+                          const sec = await invoke('get_profile_security', { profileName: activeProfile });
+                          setProfileSecurity(sec);
+                          showToast('Mot de passe supprimé');
+                        }, title: 'Confirmer avec mot de passe actuel' });
+                      }} className="px-3 py-2 bg-red-500/10 text-red-400 rounded-lg text-xs border border-red-500/20 hover:bg-red-500/20">
+                        Supprimer
+                      </button>
+                    </div>
+                  ) : (
+                    <button onClick={() => { setPinModal({ mode: 'setup', onConfirm: async (pwd) => {
+                      await invoke('set_profile_password', { profileName: activeProfile, rawPassword: pwd });
+                      const sec = await invoke('get_profile_security', { profileName: activeProfile });
+                      setProfileSecurity(sec);
+                      showToast('Mot de passe configuré');
+                    }, title: 'Configurer un mot de passe', minLength: 8, placeholder: 'Mot de passe (min 8 caractères)' }); }}
+                      className="w-full px-3 py-2 bg-amber-500 text-zinc-900 rounded-lg text-xs font-medium hover:bg-amber-400">
+                      Configurer un mot de passe
+                    </button>
                   )}
                 </div>
 
-                {profileSecurity.has_pin ? (
-                  <>
-                    {/* PIN + Encryption simple status row */}
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className={`p-3 rounded-lg border ${T.inputBorder} ${T.inputBg}`}>
-                        <div className={`text-xs ${T.textFaint} mb-1`}>PIN</div>
-                        <div className="text-sm text-green-400 font-medium">Actif</div>
-                      </div>
-                      <div className={`p-3 rounded-lg border ${T.inputBorder} ${T.inputBg}`}>
-                        <div className={`text-xs ${T.textFaint} mb-1`}>Chiffrement</div>
-                        <div className={`text-sm font-medium ${encryptionSalt ? 'text-green-400' : 'text-amber-400'}`}>
-                          {encryptionSalt ? 'Actif' : 'Disponible'}
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Inactivity timer */}
-                    <div>
-                      <label className={`block text-sm ${T.textMuted} mb-2`}>Verrouillage automatique</label>
-                      <select value={profileSecurity.inactivity_minutes}
-                        onChange={async (e) => {
-                          const mins = parseInt(e.target.value);
-                          try {
-                            await invoke('set_profile_pin', { profileName: activeProfile, rawPin: '__KEEP__', inactivityMinutes: mins });
-                            setProfileSecurity(prev => ({ ...prev, inactivity_minutes: mins }));
-                            showToast(mins > 0 ? `Verrouillage après ${mins} min` : 'Verrouillage auto désactivé');
-                          } catch(_) {}
-                        }}
-                        className={`w-full px-3 py-2.5 ${T.inputBg} border ${T.inputBorder} rounded-lg text-sm`}>
-                        <option value={0}>Désactivé</option>
-                        <option value={1}>1 minute</option>
-                        <option value={2}>2 minutes</option>
-                        <option value={5}>5 minutes</option>
-                        <option value={10}>10 minutes</option>
-                        <option value={15}>15 minutes</option>
-                        <option value={30}>30 minutes</option>
-                      </select>
-                    </div>
-
-                    {/* Lock now */}
-                    <button onClick={() => { setShowMenuDrawer(false); setIsLocked(true); setTheme('dark'); clearSensitiveState(); setPinInput(''); }}
-                      className="w-full px-4 py-2.5 bg-amber-500 text-zinc-900 rounded-lg text-sm font-medium hover:bg-amber-400 flex items-center justify-center gap-2">
-                      Verrouiller maintenant
-                    </button>
-
-                    {/* Change PIN */}
-                    <button onClick={handlePinChange}
-                      className={`w-full px-4 py-2.5 rounded-lg text-sm font-medium border ${T.inputBorder} ${T.inputBg} ${T.textMuted} hover:border-amber-500/30 transition-colors`}>
-                      Changer le PIN
-                    </button>
-
-                    {/* Remove PIN */}
-                    <button onClick={async () => {
-                      if (await showConfirm('Supprimer le PIN de ce profil ? Le chiffrement sera désactivé.')) {
-                        try {
-                          const pin = await requestPinConfirmation('Confirmer la suppression du PIN');
-                          await invoke('remove_profile_pin', { profileName: activeProfile, currentPin: pin });
-                          setProfileSecurity({ has_pin: false, inactivity_minutes: 0 });
-                          setEncryptionSalt('');
-                          showToast('PIN et chiffrement supprimés');
-                        } catch (e) {
-                          if (String(e) !== 'Error: Opération annulée') showToast('Échec de la suppression');
-                        }
-                      }
-                    }} className="w-full px-4 py-2.5 bg-red-500/10 text-red-400 rounded-lg text-sm hover:bg-red-500/20 border border-red-500/20">
-                      Supprimer le PIN
-                    </button>
-
-                    {/* Advanced section (collapsible) */}
-                    <div className="border-t border-zinc-800 pt-4 mt-2">
-                      <button onClick={() => setShowAdvancedSecurity(!showAdvancedSecurity)}
-                        className={`flex items-center justify-between w-full text-sm ${T.textMuted} hover:text-amber-500 transition-colors`}>
-                        <span>Paramètres avancés</span>
-                        <span className="text-xs">{showAdvancedSecurity ? '▲' : '▼'}</span>
+                {/* ── PIN factor ── */}
+                <div className={`p-3 rounded-lg border ${T.inputBorder} ${T.inputBg}`}>
+                  <div className={`text-xs font-medium ${T.textMuted} mb-2`}>Code PIN</div>
+                  {profileSecurity.has_pin ? (
+                    <div className="flex gap-2">
+                      <button onClick={handlePinChange}
+                        className={`flex-1 px-3 py-2 rounded-lg text-xs border ${T.inputBorder} ${T.textMuted} hover:border-amber-500/30`}>
+                        Changer
                       </button>
-                      {showAdvancedSecurity && (
-                        <div className="mt-4 space-y-4">
-                          {/* Salt display (read-only) */}
-                          <div>
-                            <label className={`block text-xs ${T.textMuted} mb-1`}>Sel de chiffrement</label>
-                            <div className="flex gap-2">
-                              <input
-                                type="password"
-                                value={encryptionSalt}
-                                readOnly
-                                placeholder="Aucun sel généré"
-                                className={`flex-1 px-3 py-2 ${T.inputBg} border ${T.inputBorder} rounded text-sm font-mono focus:outline-none opacity-70`}
-                              />
-                              {!encryptionSalt && (
-                                <button onClick={generateNewSalt}
-                                  className="px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg hover:bg-zinc-700 transition-colors text-xs">
-                                  Générer
-                                </button>
-                              )}
-                            </div>
-                          </div>
-
-                          {/* Test encryption */}
-                          <button
-                            onClick={() => testEncryption()}
-                            className={`w-full px-4 py-2.5 rounded-lg text-sm font-medium transition-colors ${encryptionSalt
-                              ? 'bg-blue-600 hover:bg-blue-500 text-white'
-                              : 'bg-zinc-800 text-zinc-500 cursor-not-allowed'}`}
-                            disabled={!encryptionSalt}
-                          >
-                            Tester le chiffrement
-                          </button>
-
-                          {testEncryptionResult && (
-                            <div className={`p-3 rounded-lg text-xs ${testEncryptionResult.success
-                              ? 'border border-green-500/30 bg-green-500/5 text-green-400'
-                              : 'border border-red-500/30 bg-red-500/5 text-red-400'}`}>
-                              {testEncryptionResult.success ? (
-                                <div className="font-medium">Chiffrement fonctionnel</div>
-                              ) : (
-                                <div className="font-medium">Échec du test de chiffrement</div>
-                              )}
-                            </div>
-                          )}
-
-                          <div className="p-3 bg-zinc-900/50 rounded-lg border border-zinc-800 text-xs">
-                            <div className="font-medium mb-2">Comment ça marche</div>
-                            <div className={`space-y-1 ${T.textFaint}`}>
-                              <p>PIN + sel unique = clé de chiffrement</p>
-                              <p>Chaque wallet a son propre sel</p>
-                              <p>Algorithme : AES-256-GCM</p>
-                            </div>
-                          </div>
-                        </div>
-                      )}
+                      <button onClick={async () => {
+                        if (!await showConfirm('Supprimer le PIN ?')) return;
+                        try {
+                          const pin = await requestPinConfirmation('Confirmer avec PIN actuel');
+                          await invoke('remove_profile_pin', { profileName: activeProfile, currentPin: pin });
+                          const sec = await invoke('get_profile_security', { profileName: activeProfile });
+                          setProfileSecurity(sec);
+                          showToast('PIN supprimé');
+                        } catch (e) { if (String(e) !== 'Error: Opération annulée') showToast('Échec'); }
+                      }} className="px-3 py-2 bg-red-500/10 text-red-400 rounded-lg text-xs border border-red-500/20 hover:bg-red-500/20">
+                        Supprimer
+                      </button>
                     </div>
-                  </>
-                ) : (
-                  <div className="space-y-3">
-                    <p className={`text-sm ${T.textMuted}`}>Configurez un code PIN pour protéger l'accès à ce profil. Le chiffrement AES-256 sera activé automatiquement.</p>
-                    <button
-                      onClick={handlePinSetup}
-                      className="w-full px-4 py-2.5 bg-amber-500 text-zinc-900 rounded-lg text-sm font-medium hover:bg-amber-400 transition-colors"
-                    >
+                  ) : (
+                    <button onClick={handlePinSetup}
+                      className="w-full px-3 py-2 bg-amber-500 text-zinc-900 rounded-lg text-xs font-medium hover:bg-amber-400">
                       Configurer un PIN
                     </button>
+                  )}
+                </div>
+
+                {/* ── 2FA TOTP ── */}
+                <div className={`p-3 rounded-lg border ${T.inputBorder} ${T.inputBg}`}>
+                  <div className={`text-xs font-medium ${T.textMuted} mb-2`}>Authentification 2FA (TOTP)</div>
+                  {profileSecurity.has_totp ? (
+                    <button onClick={async () => {
+                      if (!await showConfirm('Désactiver l\'authentification 2FA ?')) return;
+                      setPinModal({ mode: 'confirm', onConfirm: async (credential) => {
+                        await invoke('disable_totp', { profileName: activeProfile, authCredential: credential });
+                        const sec = await invoke('get_profile_security', { profileName: activeProfile });
+                        setProfileSecurity(sec);
+                        showToast('2FA désactivé');
+                      }, title: 'Confirmer avec PIN ou mot de passe' });
+                    }} className="w-full px-3 py-2 bg-red-500/10 text-red-400 rounded-lg text-xs border border-red-500/20 hover:bg-red-500/20">
+                      Désactiver 2FA
+                    </button>
+                  ) : (
+                    <button
+                      onClick={async () => {
+                        if (!profileSecurity.has_pin && !profileSecurity.has_password) {
+                          showToast('Configurez d\'abord un PIN ou mot de passe');
+                          return;
+                        }
+                        try {
+                          const data = await invoke('setup_totp', { profileName: activeProfile });
+                          setTotpSetupData(data);
+                          setTotpVerifyCode('');
+                          setTotpSetupError('');
+                        } catch (e) { showToast('Erreur configuration 2FA'); }
+                      }}
+                      disabled={!profileSecurity.has_pin && !profileSecurity.has_password}
+                      className={`w-full px-3 py-2 rounded-lg text-xs font-medium ${(profileSecurity.has_pin || profileSecurity.has_password)
+                        ? 'bg-green-600 text-white hover:bg-green-500' : 'bg-zinc-700 text-zinc-500 cursor-not-allowed'}`}>
+                      Activer 2FA (TOTP)
+                    </button>
+                  )}
+                  {!profileSecurity.has_pin && !profileSecurity.has_password && (
+                    <p className={`text-[10px] ${T.textFaint} mt-1`}>Requiert un PIN ou mot de passe</p>
+                  )}
+                </div>
+
+                {/* ── Inactivity timer ── */}
+                {(profileSecurity.has_pin || profileSecurity.has_password) && (
+                  <div>
+                    <label className={`block text-sm ${T.textMuted} mb-2`}>Verrouillage automatique</label>
+                    <select value={profileSecurity.inactivity_minutes}
+                      onChange={async (e) => {
+                        const mins = parseInt(e.target.value);
+                        try {
+                          await invoke('set_profile_pin', { profileName: activeProfile, rawPin: '__KEEP__', inactivityMinutes: mins });
+                          setProfileSecurity(prev => ({ ...prev, inactivity_minutes: mins }));
+                          showToast(mins > 0 ? `Verrouillage après ${mins} min` : 'Verrouillage auto désactivé');
+                        } catch(_) {}
+                      }}
+                      className={`w-full px-3 py-2.5 ${T.inputBg} border ${T.inputBorder} rounded-lg text-sm`}>
+                      <option value={0}>Désactivé</option>
+                      <option value={1}>1 minute</option>
+                      <option value={2}>2 minutes</option>
+                      <option value={5}>5 minutes</option>
+                      <option value={10}>10 minutes</option>
+                      <option value={15}>15 minutes</option>
+                      <option value={30}>30 minutes</option>
+                    </select>
+                  </div>
+                )}
+
+                {/* ── Lock now ── */}
+                {(profileSecurity.has_pin || profileSecurity.has_password) && (
+                  <button onClick={() => {
+                    setShowMenuDrawer(false);
+                    setIsLocked(true);
+                    setTheme('dark');
+                    clearSensitiveState();
+                    setAuthInputs({ password: '', pin: '', totp_code: '' });
+                    const steps = getAuthSteps(profileSecurity);
+                    setAuthStep(steps[0] || null);
+                  }}
+                    className="w-full px-4 py-2.5 bg-amber-500 text-zinc-900 rounded-lg text-sm font-medium hover:bg-amber-400 flex items-center justify-center gap-2">
+                    Verrouiller maintenant
+                  </button>
+                )}
+
+                {/* Advanced section (collapsible) */}
+                {(profileSecurity.has_pin || profileSecurity.has_password) && (
+                  <div className="border-t border-zinc-800 pt-4 mt-2">
+                    <button onClick={() => setShowAdvancedSecurity(!showAdvancedSecurity)}
+                      className={`flex items-center justify-between w-full text-sm ${T.textMuted} hover:text-amber-500 transition-colors`}>
+                      <span>Paramètres avancés</span>
+                      <span className="text-xs">{showAdvancedSecurity ? '▲' : '▼'}</span>
+                    </button>
+                    {showAdvancedSecurity && (
+                      <div className="mt-4 space-y-4">
+                        <div>
+                          <label className={`block text-xs ${T.textMuted} mb-1`}>Sel de chiffrement</label>
+                          <div className="flex gap-2">
+                            <input type="password" value={encryptionSalt} readOnly placeholder="Aucun sel généré"
+                              className={`flex-1 px-3 py-2 ${T.inputBg} border ${T.inputBorder} rounded text-sm font-mono focus:outline-none opacity-70`} />
+                            {!encryptionSalt && (
+                              <button onClick={generateNewSalt} className="px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg hover:bg-zinc-700 transition-colors text-xs">Générer</button>
+                            )}
+                          </div>
+                        </div>
+                        <button onClick={() => testEncryption()}
+                          className={`w-full px-4 py-2.5 rounded-lg text-sm font-medium transition-colors ${encryptionSalt ? 'bg-blue-600 hover:bg-blue-500 text-white' : 'bg-zinc-800 text-zinc-500 cursor-not-allowed'}`}
+                          disabled={!encryptionSalt}>
+                          Tester le chiffrement
+                        </button>
+                        {testEncryptionResult && (
+                          <div className={`p-3 rounded-lg text-xs ${testEncryptionResult.success ? 'border border-green-500/30 bg-green-500/5 text-green-400' : 'border border-red-500/30 bg-red-500/5 text-red-400'}`}>
+                            <div className="font-medium">{testEncryptionResult.success ? 'Chiffrement fonctionnel' : 'Échec du test'}</div>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -2534,6 +2671,63 @@ const App = () => {
         </div>
       </div>
       {showMenuDrawer && <div className="fixed inset-0 bg-black/30 z-40" onClick={() => setShowMenuDrawer(false)} />}
+
+      {/* ── TOTP Setup Modal ── */}
+      {totpSetupData && (
+        <div className="fixed inset-0 z-[10000] bg-black/80 flex items-center justify-center p-4" onClick={() => setTotpSetupData(null)}>
+          <div className={`bg-zinc-900 border border-zinc-700 rounded-xl p-6 w-full max-w-md mx-auto shadow-2xl`} onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold text-zinc-100">Configuration 2FA</h3>
+              <button onClick={() => setTotpSetupData(null)} className="text-zinc-500 hover:text-amber-500 text-xl">X</button>
+            </div>
+            <p className="text-sm text-zinc-400 mb-4">
+              Scannez ce QR code avec votre application d'authentification (Google Authenticator, Authy, etc.)
+            </p>
+            <div className="flex justify-center mb-4 p-4 bg-white rounded-lg">
+              <QRCodeSVG value={totpSetupData.uri} size={200} level="M" />
+            </div>
+            <div className="mb-4 p-3 bg-zinc-800 border border-zinc-700 rounded-lg">
+              <p className="text-xs text-zinc-500 mb-1">Cle manuelle (si le scan echoue)</p>
+              <p className="font-mono text-sm text-amber-500 break-all select-all cursor-text">{totpSetupData.secret}</p>
+            </div>
+            <div className="mb-4">
+              <label className="block text-xs font-medium text-zinc-400 mb-2">Code de verification (6 chiffres)</label>
+              <input type="text" inputMode="numeric" pattern="[0-9]*" maxLength="6"
+                value={totpVerifyCode}
+                onChange={e => { setTotpVerifyCode(e.target.value.replace(/\D/g, '')); setTotpSetupError(''); }}
+                onKeyDown={e => { if (e.key === 'Enter' && totpVerifyCode.length === 6) {
+                  invoke('enable_totp', { profileName: activeProfile, verificationCode: totpVerifyCode })
+                    .then(async () => {
+                      setTotpSetupData(null);
+                      const sec = await invoke('get_profile_security', { profileName: activeProfile });
+                      setProfileSecurity(sec);
+                      showToast('2FA active avec succes');
+                    })
+                    .catch(() => setTotpSetupError('Code invalide. Verifiez l\'heure de votre appareil.'));
+                }}}
+                placeholder="000000" autoFocus
+                className="w-full px-4 py-3 bg-zinc-800 border border-zinc-700 rounded-lg text-center text-2xl tracking-[0.5em] font-mono text-zinc-100 focus:outline-none focus:border-amber-500/50 placeholder:text-zinc-600"
+              />
+              {totpSetupError && <p className="text-red-400 text-xs mt-2">{totpSetupError}</p>}
+            </div>
+            <button
+              onClick={async () => {
+                try {
+                  await invoke('enable_totp', { profileName: activeProfile, verificationCode: totpVerifyCode });
+                  setTotpSetupData(null);
+                  const sec = await invoke('get_profile_security', { profileName: activeProfile });
+                  setProfileSecurity(sec);
+                  showToast('2FA active avec succes');
+                } catch (e) { setTotpSetupError('Code invalide. Verifiez l\'heure de votre appareil.'); }
+              }}
+              disabled={totpVerifyCode.length !== 6}
+              className={`w-full px-4 py-3 rounded-lg font-medium transition-colors ${totpVerifyCode.length === 6 ? 'bg-amber-500 text-zinc-900 hover:bg-amber-400' : 'bg-zinc-700 text-zinc-500 cursor-not-allowed'}`}>
+              Activer 2FA
+            </button>
+            <p className="text-xs text-zinc-600 mt-3 text-center">Le code change toutes les 30 secondes</p>
+          </div>
+        </div>
+      )}
 
       {/* ── Bitcoin Whitepaper Overlay ── */}
       {showWhitepaper && (
@@ -2586,23 +2780,58 @@ const App = () => {
       />
 
       {/* ── Lock Screen ── */}
-      {isLocked && (
+      {isLocked && (() => {
+        const steps = getAuthSteps(profileSecurity);
+        const currentIdx = steps.indexOf(authStep);
+        const isLast = currentIdx === steps.length - 1;
+        const stepLabel = { password: 'Mot de passe', pin: 'Code PIN', totp: 'Code 2FA' };
+        return (
         <div className="fixed inset-0 z-[9999] bg-zinc-900 flex flex-col items-center justify-center select-none">
           <div className="text-center mb-8">
             <div className="text-5xl mb-4">🔒</div>
             <h1 className="text-xl font-bold text-zinc-200 mb-1">JANUS Monitor</h1>
-            <p className="text-sm text-zinc-500">Profil verrouillé</p>
+            <p className="text-sm text-zinc-500">
+              {authStep ? stepLabel[authStep] || 'Authentification' : 'Profil verrouillé'}
+            </p>
+            {steps.length > 1 && (
+              <div className="flex gap-2 justify-center mt-3">
+                {steps.map((s, i) => (
+                  <div key={s} className={`flex items-center gap-1`}>
+                    <div className={`w-2.5 h-2.5 rounded-full transition-colors ${
+                      i < currentIdx ? 'bg-green-500' : i === currentIdx ? 'bg-amber-500' : 'bg-zinc-700'
+                    }`} />
+                    <span className={`text-[10px] ${i === currentIdx ? 'text-zinc-400' : 'text-zinc-600'}`}>{stepLabel[s]}</span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
           <div className="w-72 space-y-3">
-            <input
-              type="password"
-              value={pinInput}
-              onChange={e => { setPinInput(e.target.value); setPinError(''); }}
-              onKeyDown={e => { if (e.key === 'Enter') handleUnlock(); }}
-              placeholder="PIN ou mot de passe..."
-              autoFocus
-              className="w-full px-4 py-3 bg-zinc-800 border border-zinc-700 rounded-lg text-center text-lg tracking-widest text-zinc-100 focus:outline-none focus:border-amber-500/50 placeholder:text-zinc-600 placeholder:tracking-normal placeholder:text-sm"
-            />
+            {authStep === 'password' && (
+              <input type="password" value={authInputs.password}
+                onChange={e => { setAuthInputs(p => ({ ...p, password: e.target.value })); setPinError(''); }}
+                onKeyDown={e => { if (e.key === 'Enter') handleAuthStep(); }}
+                placeholder="Mot de passe..." autoFocus
+                className="w-full px-4 py-3 bg-zinc-800 border border-zinc-700 rounded-lg text-center text-lg text-zinc-100 focus:outline-none focus:border-amber-500/50 placeholder:text-zinc-600 placeholder:text-sm"
+              />
+            )}
+            {authStep === 'pin' && (
+              <input type="password" value={authInputs.pin}
+                onChange={e => { setAuthInputs(p => ({ ...p, pin: e.target.value })); setPinError(''); }}
+                onKeyDown={e => { if (e.key === 'Enter') handleAuthStep(); }}
+                placeholder="PIN..." autoFocus
+                className="w-full px-4 py-3 bg-zinc-800 border border-zinc-700 rounded-lg text-center text-lg tracking-widest text-zinc-100 focus:outline-none focus:border-amber-500/50 placeholder:text-zinc-600 placeholder:tracking-normal placeholder:text-sm"
+              />
+            )}
+            {authStep === 'totp' && (
+              <input type="text" inputMode="numeric" pattern="[0-9]*" maxLength="6"
+                value={authInputs.totp_code}
+                onChange={e => { setAuthInputs(p => ({ ...p, totp_code: e.target.value.replace(/\D/g, '') })); setPinError(''); }}
+                onKeyDown={e => { if (e.key === 'Enter') handleAuthStep(); }}
+                placeholder="000000" autoFocus
+                className="w-full px-4 py-3 bg-zinc-800 border border-zinc-700 rounded-lg text-center text-2xl tracking-[0.5em] font-mono text-zinc-100 focus:outline-none focus:border-amber-500/50 placeholder:text-zinc-600 placeholder:tracking-[0.5em]"
+              />
+            )}
             {pinError && <p className="text-red-400 text-xs text-center">{pinError}</p>}
             {pinAttemptInfo && pinAttemptInfo.failed > 0 && (
               <div className={`text-xs text-center px-3 py-2 rounded-lg ${pinAttemptInfo.failed >= 7 ? 'bg-red-500/15 text-red-400' : 'bg-amber-500/10 text-amber-400'}`}>
@@ -2611,15 +2840,16 @@ const App = () => {
                   : `Tentative ${pinAttemptInfo.failed}/${pinAttemptInfo.max}`}
               </div>
             )}
-            <button onClick={handleUnlock}
+            <button onClick={handleAuthStep}
               disabled={pinAttemptInfo?.retry_secs > 0}
               className={`w-full px-4 py-3 rounded-lg font-medium transition-colors ${pinAttemptInfo?.retry_secs > 0 ? 'bg-zinc-700 text-zinc-500 cursor-not-allowed' : 'bg-amber-500 text-zinc-900 hover:bg-amber-400'}`}>
-              Déverrouiller
+              {isLast ? 'Déverrouiller' : 'Continuer →'}
             </button>
           </div>
           <p className="text-zinc-700 text-xs mt-8">Appuyez sur Entrée pour valider</p>
         </div>
-      )}
+        );
+      })()}
 
       {/* ── Inactivity Warning Banner ── */}
       {showInactivityWarning && !isLocked && (

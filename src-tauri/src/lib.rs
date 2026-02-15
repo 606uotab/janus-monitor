@@ -12,6 +12,8 @@ pub struct SessionKeyState(pub Mutex<Option<Vec<u8>>>);
 
 mod pin_security;
 mod input_validation;
+mod secure_key_storage;
+mod totp_security;
 
 // 
 // SECURE LOGGING SYSTEM
@@ -697,7 +699,22 @@ async fn fetch_etc_history(
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ProfileSecurity {
     pub has_pin: bool,
+    pub has_password: bool,
+    pub has_totp: bool,
     pub inactivity_minutes: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AuthAttempt {
+    pub password: Option<String>,
+    pub pin: Option<String>,
+    pub totp_code: Option<String>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct TotpSetupResult {
+    pub uri: String,
+    pub secret: String,
 }
 
 #[tauri::command]
@@ -705,12 +722,22 @@ fn get_profile_security(state: State<DbState>, profile_name: String) -> Result<P
     input_validation::validate_profile_name(&profile_name)?;
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     match conn.query_row(
-        "SELECT pin_hash, inactivity_minutes FROM profile_security WHERE profile_name = ?1",
+        "SELECT pin_hash, inactivity_minutes, password_hash, totp_enabled FROM profile_security WHERE profile_name = ?1",
         params![profile_name],
-        |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+        |row| Ok((
+            row.get::<_, Option<String>>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, Option<String>>(2)?,
+            row.get::<_, i64>(3).unwrap_or(0),
+        )),
     ) {
-        Ok((_, mins)) => Ok(ProfileSecurity { has_pin: true, inactivity_minutes: mins as u32 }),
-        Err(_) => Ok(ProfileSecurity { has_pin: false, inactivity_minutes: 0 }),
+        Ok((pin_hash, mins, password_hash, totp_enabled)) => Ok(ProfileSecurity {
+            has_pin: pin_hash.as_ref().map_or(false, |h| !h.is_empty()),
+            has_password: password_hash.as_ref().map_or(false, |h| !h.is_empty()),
+            has_totp: totp_enabled == 1,
+            inactivity_minutes: mins as u32,
+        }),
+        Err(_) => Ok(ProfileSecurity { has_pin: false, has_password: false, has_totp: false, inactivity_minutes: 0 }),
     }
 }
 
@@ -859,20 +886,29 @@ fn get_pin_status(profile_name: String) -> Result<PinStatus, String> {
 #[tauri::command]
 fn remove_profile_pin(state: State<DbState>, session_key: State<SessionKeyState>, profile_name: String, current_pin: String) -> Result<(), String> {
     input_validation::validate_profile_name(&profile_name)?;
-    // Verify current PIN before allowing removal
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     let stored_hash: String = conn.query_row(
         "SELECT pin_hash FROM profile_security WHERE profile_name = ?1",
         params![profile_name],
-        |row| row.get(0),
-    ).map_err(|_| "No PIN set for this profile".to_string())?;
-    let valid = pin_security::verify_pin(&current_pin, &stored_hash)?;
-    if !valid {
+        |row| row.get::<_, Option<String>>(0),
+    ).map_err(|_| "No PIN set for this profile".to_string())?
+     .ok_or_else(|| "No PIN set for this profile".to_string())?;
+    if !pin_security::verify_pin(&current_pin, &stored_hash)? {
         return Err("Incorrect PIN".to_string());
     }
-    conn.execute("DELETE FROM profile_security WHERE profile_name = ?1", params![profile_name])
-        .map_err(|e| e.to_string())?;
-    // Also clear session key
+    // Check if other factors exist — if so, just null out pin_hash; otherwise delete row
+    let (has_password, has_totp): (bool, bool) = conn.query_row(
+        "SELECT password_hash IS NOT NULL AND password_hash != '', totp_enabled FROM profile_security WHERE profile_name = ?1",
+        params![profile_name],
+        |row| Ok((row.get::<_, bool>(0).unwrap_or(false), row.get::<_, i64>(1).unwrap_or(0) == 1)),
+    ).unwrap_or((false, false));
+    if has_password || has_totp {
+        conn.execute("UPDATE profile_security SET pin_hash = NULL WHERE profile_name = ?1", params![profile_name])
+            .map_err(|e| e.to_string())?;
+    } else {
+        conn.execute("DELETE FROM profile_security WHERE profile_name = ?1", params![profile_name])
+            .map_err(|e| e.to_string())?;
+    }
     if let Ok(mut key_state) = session_key.0.lock() {
         if let Some(ref mut key) = *key_state {
             for byte in key.iter_mut() { *byte = 0; }
@@ -883,9 +919,268 @@ fn remove_profile_pin(state: State<DbState>, session_key: State<SessionKeyState>
     Ok(())
 }
 
-// 
+// =============================================================================
+// 🔒 PASSWORD AUTHENTICATION FACTOR
+// =============================================================================
+
+#[tauri::command]
+fn set_profile_password(state: State<DbState>, profile_name: String, raw_password: String) -> Result<(), String> {
+    input_validation::validate_profile_name(&profile_name)?;
+    if raw_password.len() < 8 {
+        return Err("Le mot de passe doit contenir au moins 8 caractères".to_string());
+    }
+    if raw_password.len() > 128 {
+        return Err("Mot de passe trop long (max 128 caractères)".to_string());
+    }
+    let password_hash = pin_security::hash_pin(&raw_password)
+        .map_err(|_| "Erreur de hashage".to_string())?;
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let exists: bool = conn.query_row(
+        "SELECT COUNT(*) FROM profile_security WHERE profile_name = ?1",
+        params![profile_name], |row| row.get::<_, i64>(0),
+    ).map(|c| c > 0).unwrap_or(false);
+    if exists {
+        conn.execute(
+            "UPDATE profile_security SET password_hash = ?1 WHERE profile_name = ?2",
+            params![password_hash, profile_name],
+        ).map_err(|e| e.to_string())?;
+    } else {
+        conn.execute(
+            "INSERT INTO profile_security (profile_name, password_hash, inactivity_minutes) VALUES (?1, ?2, 5)",
+            params![profile_name, password_hash],
+        ).map_err(|e| e.to_string())?;
+    }
+    eprintln!("[SECURITY] Password set for profile '{}' using Argon2id", profile_name);
+    Ok(())
+}
+
+#[tauri::command]
+fn remove_profile_password(state: State<DbState>, profile_name: String, current_password: String) -> Result<(), String> {
+    input_validation::validate_profile_name(&profile_name)?;
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let stored_hash: String = conn.query_row(
+        "SELECT password_hash FROM profile_security WHERE profile_name = ?1",
+        params![profile_name],
+        |row| row.get::<_, Option<String>>(0),
+    ).map_err(|_| "No password set".to_string())?
+     .ok_or_else(|| "No password set".to_string())?;
+    if !pin_security::verify_pin(&current_password, &stored_hash)? {
+        return Err("Mot de passe incorrect".to_string());
+    }
+    let (has_pin, has_totp): (bool, bool) = conn.query_row(
+        "SELECT pin_hash IS NOT NULL AND pin_hash != '', totp_enabled FROM profile_security WHERE profile_name = ?1",
+        params![profile_name],
+        |row| Ok((row.get::<_, bool>(0).unwrap_or(false), row.get::<_, i64>(1).unwrap_or(0) == 1)),
+    ).unwrap_or((false, false));
+    if has_pin || has_totp {
+        conn.execute("UPDATE profile_security SET password_hash = NULL WHERE profile_name = ?1", params![profile_name])
+            .map_err(|e| e.to_string())?;
+    } else {
+        conn.execute("DELETE FROM profile_security WHERE profile_name = ?1", params![profile_name])
+            .map_err(|e| e.to_string())?;
+    }
+    eprintln!("[SECURITY] Password removed for profile '{}'", profile_name);
+    Ok(())
+}
+
+// =============================================================================
+// 🔒 TOTP 2FA COMMANDS
+// =============================================================================
+
+#[tauri::command]
+fn setup_totp(state: State<DbState>, profile_name: String) -> Result<TotpSetupResult, String> {
+    input_validation::validate_profile_name(&profile_name)?;
+    let secret = totp_security::generate_totp_secret()?;
+    let uri = totp_security::generate_totp_uri(&secret, &profile_name)?;
+    let encrypted = totp_security::encrypt_totp_secret(&secret)?;
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    // Ensure a row exists
+    let exists: bool = conn.query_row(
+        "SELECT COUNT(*) FROM profile_security WHERE profile_name = ?1",
+        params![profile_name], |row| row.get::<_, i64>(0),
+    ).map(|c| c > 0).unwrap_or(false);
+    if exists {
+        conn.execute(
+            "UPDATE profile_security SET totp_secret_encrypted = ?1, totp_enabled = 0 WHERE profile_name = ?2",
+            params![encrypted, profile_name],
+        ).map_err(|e| e.to_string())?;
+    } else {
+        conn.execute(
+            "INSERT INTO profile_security (profile_name, totp_secret_encrypted, totp_enabled, inactivity_minutes) VALUES (?1, ?2, 0, 5)",
+            params![profile_name, encrypted],
+        ).map_err(|e| e.to_string())?;
+    }
+    Ok(TotpSetupResult { uri, secret })
+}
+
+#[tauri::command]
+fn enable_totp(state: State<DbState>, profile_name: String, verification_code: String) -> Result<(), String> {
+    input_validation::validate_profile_name(&profile_name)?;
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let encrypted: String = conn.query_row(
+        "SELECT totp_secret_encrypted FROM profile_security WHERE profile_name = ?1",
+        params![profile_name],
+        |row| row.get::<_, Option<String>>(0),
+    ).map_err(|_| "TOTP not initialized".to_string())?
+     .ok_or_else(|| "TOTP not initialized".to_string())?;
+    let secret = totp_security::decrypt_totp_secret(&encrypted)?;
+    if !totp_security::verify_totp_code(&secret, &profile_name, &verification_code)? {
+        return Err("Code de vérification invalide".to_string());
+    }
+    conn.execute(
+        "UPDATE profile_security SET totp_enabled = 1 WHERE profile_name = ?1",
+        params![profile_name],
+    ).map_err(|e| e.to_string())?;
+    eprintln!("[SECURITY] TOTP 2FA enabled for profile '{}'", profile_name);
+    Ok(())
+}
+
+#[tauri::command]
+fn disable_totp(state: State<DbState>, profile_name: String, auth_credential: String) -> Result<(), String> {
+    input_validation::validate_profile_name(&profile_name)?;
+    pin_security::check_rate_limit(&profile_name)?;
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    // Verify at least one existing factor (PIN or password)
+    let (pin_hash, password_hash): (Option<String>, Option<String>) = conn.query_row(
+        "SELECT pin_hash, password_hash FROM profile_security WHERE profile_name = ?1",
+        params![profile_name],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    ).map_err(|_| "Profile not found".to_string())?;
+    let mut verified = false;
+    if let Some(ref h) = pin_hash {
+        if !h.is_empty() && pin_security::verify_pin(&auth_credential, h)? { verified = true; }
+    }
+    if !verified {
+        if let Some(ref h) = password_hash {
+            if !h.is_empty() && pin_security::verify_pin(&auth_credential, h)? { verified = true; }
+        }
+    }
+    if !verified {
+        pin_security::record_failed_attempt(&profile_name)?;
+        return Err("Authentification échouée".to_string());
+    }
+    pin_security::record_successful_attempt(&profile_name)?;
+    conn.execute(
+        "UPDATE profile_security SET totp_enabled = 0, totp_secret_encrypted = NULL WHERE profile_name = ?1",
+        params![profile_name],
+    ).map_err(|e| e.to_string())?;
+    eprintln!("[SECURITY] TOTP 2FA disabled for profile '{}'", profile_name);
+    Ok(())
+}
+
+// =============================================================================
+// 🔒 UNIFIED MULTI-FACTOR AUTHENTICATION
+// =============================================================================
+
+#[tauri::command]
+fn verify_profile_auth(
+    state: State<DbState>,
+    session_key: State<SessionKeyState>,
+    profile_name: String,
+    auth_attempt: AuthAttempt,
+) -> Result<bool, String> {
+    input_validation::validate_profile_name(&profile_name)?;
+    pin_security::check_rate_limit(&profile_name)?;
+
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let row = conn.query_row(
+        "SELECT pin_hash, password_hash, totp_secret_encrypted, totp_enabled, inactivity_minutes FROM profile_security WHERE profile_name = ?1",
+        params![profile_name],
+        |row| Ok((
+            row.get::<_, Option<String>>(0)?,
+            row.get::<_, Option<String>>(1)?,
+            row.get::<_, Option<String>>(2)?,
+            row.get::<_, i64>(3).unwrap_or(0),
+            row.get::<_, i64>(4).unwrap_or(0),
+        )),
+    ).map_err(|_| "Profile security not configured".to_string())?;
+
+    let (pin_hash, password_hash, totp_secret_enc, totp_enabled, _mins) = row;
+
+    // 1. Verify password if set
+    if let Some(ref h) = password_hash {
+        if !h.is_empty() {
+            let pwd = auth_attempt.password.as_deref().unwrap_or("");
+            if pwd.is_empty() || !pin_security::verify_pin(pwd, h)? {
+                pin_security::record_failed_attempt(&profile_name)?;
+                return Ok(false);
+            }
+        }
+    }
+
+    // 2. Verify PIN if set
+    if let Some(ref h) = pin_hash {
+        if !h.is_empty() {
+            let pin = auth_attempt.pin.as_deref().unwrap_or("");
+            if pin.is_empty() {
+                pin_security::record_failed_attempt(&profile_name)?;
+                return Ok(false);
+            }
+            // Legacy SHA-256 migration
+            if pin_security::is_legacy_sha256_hash(h) {
+                let legacy = sha256_hex(pin);
+                if legacy != *h {
+                    pin_security::record_failed_attempt(&profile_name)?;
+                    return Ok(false);
+                }
+                let new_hash = pin_security::migrate_pin_hash(pin)?;
+                conn.execute(
+                    "UPDATE profile_security SET pin_hash = ?1 WHERE profile_name = ?2",
+                    params![new_hash, profile_name],
+                ).map_err(|e| e.to_string())?;
+            } else if !pin_security::verify_pin(pin, h)? {
+                pin_security::record_failed_attempt(&profile_name)?;
+                return Ok(false);
+            }
+        }
+    }
+
+    // 3. Verify TOTP if enabled
+    if totp_enabled == 1 {
+        if let Some(ref enc) = totp_secret_enc {
+            if !enc.is_empty() {
+                let code = auth_attempt.totp_code.as_deref().unwrap_or("");
+                if code.is_empty() {
+                    pin_security::record_failed_attempt(&profile_name)?;
+                    return Ok(false);
+                }
+                let secret = totp_security::decrypt_totp_secret(enc)?;
+                if !totp_security::verify_totp_code(&secret, &profile_name, code)? {
+                    pin_security::record_failed_attempt(&profile_name)?;
+                    return Ok(false);
+                }
+            }
+        }
+    }
+
+    // All factors passed!
+    pin_security::record_successful_attempt(&profile_name)?;
+
+    // Derive session key — priority: PIN > Password
+    let key_material = if let Some(ref pin) = auth_attempt.pin {
+        if !pin.is_empty() && pin_hash.as_ref().map_or(false, |h| !h.is_empty()) {
+            pin.clone()
+        } else if let Some(ref pwd) = auth_attempt.password {
+            pwd.clone()
+        } else {
+            String::new()
+        }
+    } else if let Some(ref pwd) = auth_attempt.password {
+        pwd.clone()
+    } else {
+        String::new()
+    };
+
+    if !key_material.is_empty() {
+        derive_and_store_session_key(&session_key, &key_material, &conn, &profile_name)?;
+    }
+
+    Ok(true)
+}
+
+//
 // BACKGROUND MONITORING TASK
-// 
+//
 
 pub fn start_monitoring_task(
     monitoring_state: Arc<TokioMutex<MonitoringState>>,
@@ -1378,14 +1673,30 @@ fn init_db(conn: &Connection) -> Result<(), rusqlite::Error> {
         )", [],
     )?;
 
-    // Profile security (PIN/password)
+    // Profile security (PIN/password/2FA)
     conn.execute(
         "CREATE TABLE IF NOT EXISTS profile_security (
             profile_name TEXT PRIMARY KEY,
-            pin_hash TEXT NOT NULL,
-            inactivity_minutes INTEGER DEFAULT 0
+            pin_hash TEXT,
+            inactivity_minutes INTEGER DEFAULT 0,
+            password_hash TEXT,
+            totp_secret_encrypted TEXT,
+            totp_enabled INTEGER DEFAULT 0
         )", [],
     )?;
+
+    // Migration v2.2→v2.3: add password + TOTP columns to existing tables
+    let has_totp_col: bool = conn
+        .prepare("SELECT COUNT(*) FROM pragma_table_info('profile_security') WHERE name='totp_enabled'")?
+        .query_row([], |row| row.get::<_, i64>(0))
+        .map(|c| c > 0)
+        .unwrap_or(false);
+    if !has_totp_col {
+        conn.execute("ALTER TABLE profile_security ADD COLUMN password_hash TEXT", []).ok();
+        conn.execute("ALTER TABLE profile_security ADD COLUMN totp_secret_encrypted TEXT", []).ok();
+        conn.execute("ALTER TABLE profile_security ADD COLUMN totp_enabled INTEGER DEFAULT 0", []).ok();
+        eprintln!("[MIGRATION v2.2→v2.3] Added password_hash, totp columns to profile_security");
+    }
 
     let has_old_category: bool = conn
     .prepare("SELECT COUNT(*) FROM pragma_table_info('wallets') WHERE name='category' AND type='TEXT'")?
@@ -3389,11 +3700,17 @@ pub fn run() {
             fetch_address_history,           // ✨ HISTORIQUE BLOCKCHAIN
             save_csv_file,                   // 📄 EXPORT CSV
             get_home_dir,                    // 🏠 HOME DIR
-            get_profile_security,            // 🔒 PIN
+            get_profile_security,            // 🔒 Security
             set_profile_pin,
             verify_profile_pin,
             remove_profile_pin,
             get_pin_status,
+            set_profile_password,            // 🔒 Password factor
+            remove_profile_password,
+            setup_totp,                      // 🔒 TOTP 2FA
+            enable_totp,
+            disable_totp,
+            verify_profile_auth,             // 🔒 Multi-factor auth
             generate_new_salt,
             init_encryption_system,
             test_encryption_backend,

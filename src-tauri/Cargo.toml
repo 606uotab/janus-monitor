@@ -1,6 +1,6 @@
 [package]
 name = "janus-monitor"
-version = "2.2.1"
+version = "2.3.0"
 description = "JANUS Strategy - Crypto Reserve Monitor"
 authors = ["JANUS"]
 edition = "2021"
@@ -29,6 +29,9 @@ argon2 = { version = "0.5", features = ["std"] }  # Password hashing
 hex = "0.4"  # For key serialization
 lazy_static = "1.4"  # For static initialization
 once_cell = "1.19"  # For once-cell initialization
+
+# 2FA / TOTP
+totp-rs = { version = "5", features = ["otpauth"] }
 
 # Monero integration
 thiserror = "1.0"  # For custom error types

@@ -1,5 +1,5 @@
 // =============================================================================
-// 🔒 PIN SECURITY MODULE - JANUS Monitor v2.2.1
+// 🔒 PIN SECURITY MODULE - JANUS Monitor v2.3.0
 // =============================================================================
 // Argon2id hashing, rate limiting, timing-safe comparison, legacy migration
 // FIXES: CRIT-01, CRIT-11, MAJ-05
