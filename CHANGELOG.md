@@ -1,5 +1,38 @@
 # Changelog
 
+## [2.2.1] — 2026-02-15
+
+### Solarpunk Theme (Special Edition)
+- Nouveau thème clair Solarpunk avec fond JPEG Art Nouveau
+- Ville cyberpunk en silhouette floue (Cairo + ImageMagick Gaussian blur)
+- Collines verdoyantes recouvrant partiellement la ville (nature reprend ses droits)
+- Particules de pollen doré animées (45 particules, 3 variantes d'animation)
+- Palette ivoire-vert transparente pour laisser le fond visible
+- Script Python/Cairo pour régénérer le fond (`src/assets/generate_solarpunk_bg.py`)
+
+### Security Hardening
+- Hashage PIN via Argon2id (remplace le stockage en clair)
+- Chiffrement des logs sensibles via libsodium secretbox
+- Validation stricte de toutes les entrées utilisateur (adresses, noms de profil, catégories)
+- Nonce unique par message de log (correction de réutilisation de nonce)
+- Suppression des fuites console.log/console.error (frontend et backend)
+- Suppression du fallback clipboard non sécurisé
+
+### Secure Startup Flow
+- Démarrage toujours sur profil `default_template` vierge (thème sombre, aucun wallet)
+- `reset_wallets` + `save_profile` exécutés à chaque cold start
+- Le thème du profil n'est jamais appliqué avant l'authentification PIN
+- Pattern `savedThemeRef` : le thème est stocké en ref et appliqué uniquement après unlock
+- Tous les handlers de verrouillage forcent le thème sombre
+
+### Monero & PIVX Integration (v2.2)
+- Intégration noeud RPC Monero (view key + spend key)
+- Intégration noeud RPC PIVX (balance régulière + zPIV)
+- Architecture par famille de blockchains
+- Prix Bitfinex pour XMR et XAUT
+
+---
+
 ## [2.0.0] — 2026-02-14
 
 ### 🔔 Pending Transactions Monitor (Phase 3)
