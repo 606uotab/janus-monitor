@@ -21,7 +21,7 @@ import {
 } from './integrations';
 import PendingTransactionsPanel from './PendingTransactionsPanel';
 import TokenSearch from './TokenSearch';
-import { NoctaliMoon, NoctaliImages, NoctaliStarfield, LunarPunkMoon, LunarPunkDunes, LunarPunkDust } from './themes';
+import { NoctaliMoon, NoctaliImages, NoctaliStarfield, LunarPunkMoon, LunarPunkDunes, LunarPunkDust, SolarpunkBackground, SolarpunkPollen } from './themes';
 
 // ── SVG Icons ──
 const EyeIcon = () => (
@@ -125,6 +125,18 @@ const themes = {
     accent: 'text-[#6d8ff8]', accentBg: 'bg-[#6d8ff8]', accentBorder: 'border-[#6d8ff8]',
     accentMuted: 'text-[#6d8ff8]/70', accentHover: 'hover:bg-[#8aa4fa]',
   },
+  solarpunk: {
+    // Solarpunk: transparent cards over JPEG background, nature meets tech
+    bg: 'bg-transparent', textMain: 'text-[#1a3520]', textMuted: 'text-[#4a6a3e]', textFaint: 'text-[#7a9a6a]',
+    cardBg: 'bg-[#eaf3e0]/80', cardBorder: 'border-[#a8c898]/60', cardBg2: 'bg-[#ddebd0]/75', cardBorder2: 'border-[#98b888]/50',
+    inputBg: 'bg-[#f0f7e8]/85', inputBorder: 'border-[#a8c898]/60',
+    headerBg: 'bg-[#eaf3e0]/88', headerBorder: 'border-[#a8c898]/50',
+    rowBg: 'bg-[#e8f1de]/70', rowBorder: 'border-[#a8c898]/40', rowHover: 'hover:bg-[#ddebd0]/80',
+    dropBg: 'bg-[#eaf3e0]/90', dropBorder: 'border-[#a8c898]/60',
+    barBg: 'bg-[#b4ccaa]/60', divider: 'border-[#a8c898]/40',
+    accent: 'text-[#2a7a1a]', accentBg: 'bg-[#2a7a1a]', accentBorder: 'border-[#2a7a1a]',
+    accentMuted: 'text-[#2a7a1a]/70', accentHover: 'hover:bg-[#3a8a28]',
+  },
 };
 
 
@@ -163,10 +175,20 @@ const App = () => {
   const [pinError, setPinError] = useState('');
   const [profileSecurity, setProfileSecurity] = useState({ has_pin: false, inactivity_minutes: 0 });
   const inactivityTimerRef = useRef(null);
+  const inactivityWarningRef = useRef(null);
+  const [showInactivityWarning, setShowInactivityWarning] = useState(false);
+  const [pinAttemptInfo, setPinAttemptInfo] = useState(null); // { failed, max, retry_secs }
+  // Unified PIN modal: { mode: 'setup'|'change'|'confirm', onConfirm: fn, title: str }
+  const [pinModal, setPinModal] = useState(null);
+  const [pinModalPin, setPinModalPin] = useState('');
+  const [pinModalConfirm, setPinModalConfirm] = useState('');
+  const [pinModalError, setPinModalError] = useState('');
+  const [showAdvancedSecurity, setShowAdvancedSecurity] = useState(false);
   const [etherscanApiKey, setEtherscanApiKey] = useState('');
   const [encryptedApiKey, setEncryptedApiKey] = useState(null);
   const [apiKeySalt, setApiKeySalt] = useState(null);
   const [theme, setTheme] = useState('dark');
+  const savedThemeRef = useRef('dark'); // Store profile theme separately for lock security
   const [expandedAssets, setExpandedAssets] = useState({});
   const [showForex, setShowForex] = useState(false);
   const [profiles, setProfiles] = useState([]);
@@ -317,8 +339,7 @@ const App = () => {
       
       return true;
     } catch (error) {
-      showToast(`❌ Erreur: ${error.message}`);
-      console.error('Erreur sauvegarde Monero:', error);
+      showToast('Erreur de configuration');
       return false;
     }
   };
@@ -327,10 +348,10 @@ const App = () => {
   const fetchMoneroBalance = async (wallet) => {
     try {
       if (!isMoneroWalletWithKeys(wallet)) {
-        showToast('⚠️ Clés Monero requises pour récupérer la balance');
+        showToast('Clés Monero requises');
         return null;
       }
-      
+
       const moneroInfo = getMoneroWalletInfo(wallet);
       const walletData = prepareMoneroWalletData(
         wallet.address,
@@ -338,14 +359,14 @@ const App = () => {
         moneroInfo.spendKey,
         moneroInfo.node
       );
-      
+
       setLoading(prev => ({ ...prev, [wallet.id]: true }));
-      
+
       const result = await getPrivacyBalance('XMR', walletData.address, {
         viewKey: walletData.viewKey,
         node: walletData.node
       });
-      
+
       if (result.success) {
         // Update wallet balance
         await invoke('update_wallet', {
@@ -354,16 +375,15 @@ const App = () => {
           address: wallet.address,
           balance: result.balance
         });
-        
+
         await loadWallets();
-        showToast(`🔄 Balance Monero mise à jour: ${result.balance.toFixed(6)} XMR`);
+        showToast(hideBalances ? 'Balance Monero mise à jour' : `Balance Monero: ${result.balance.toFixed(6)} XMR`);
         return result;
       }
-      
+
       return null;
-    } catch (error) {
-      showToast(`❌ Erreur Monero: ${error.message}`);
-      console.error('Erreur balance Monero:', error);
+    } catch (_) {
+      showToast('Erreur Monero');
       return null;
     } finally {
       setLoading(prev => ({ ...prev, [wallet.id]: false }));
@@ -380,7 +400,7 @@ const App = () => {
       // Test node first
       const nodeTest = await testMoneroNode(node);
       if (!nodeTest.success) {
-        throw new Error(`Nœud Monero inaccessible: ${nodeTest.error}`);
+        throw new Error('Nœud Monero inaccessible');
       }
       
       // Test balance fetch (this will scan the blockchain)
@@ -405,7 +425,7 @@ const App = () => {
         success: false,
         error: error.message
       });
-      showToast(`❌ Test échoué: ${error.message}`);
+      showToast('Test de configuration échoué');
       return false;
     }
   };
@@ -416,70 +436,93 @@ const App = () => {
   };
 
   // ── PIN utilities ──
-  // ✅ REMOVED: hashPin() — PIN is now hashed server-side with Argon2id
-  // The raw PIN is sent securely via Tauri IPC (same-process, no network)
+  // PIN is hashed server-side with Argon2id via Tauri IPC
 
-  // ── PIN Setup Overlay ──
-  const [showPinSetupOverlay, setShowPinSetupOverlay] = useState(false);
-  const [newPin, setNewPin] = useState('');
-  const [confirmPin, setConfirmPin] = useState('');
-  const [pinSetupError, setPinSetupError] = useState('');
-
-  const openPinSetupOverlay = () => {
-    setNewPin('');
-    setConfirmPin('');
-    setPinSetupError('');
-    setShowPinSetupOverlay(true);
+  // PIN strength calculator
+  const getPinStrength = (pin) => {
+    if (!pin) return { level: 0, label: '', color: '' };
+    const len = pin.length;
+    if (len < 4) return { level: 0, label: 'Trop court', color: 'bg-red-500' };
+    let score = 0;
+    if (len >= 4) score++;
+    if (len >= 6) score++;
+    if (len >= 8) score++;
+    if (/[a-z]/.test(pin) && /[A-Z]/.test(pin)) score++;
+    if (/\d/.test(pin)) score++;
+    if (/[^a-zA-Z0-9]/.test(pin)) score++;
+    if (/^(.)\1+$/.test(pin) || '0123456789'.includes(pin) || '9876543210'.includes(pin)) score = Math.max(score - 2, 1);
+    if (score <= 1) return { level: 1, label: 'Faible', color: 'bg-red-500' };
+    if (score <= 2) return { level: 2, label: 'Moyen', color: 'bg-amber-500' };
+    if (score <= 3) return { level: 3, label: 'Bon', color: 'bg-yellow-400' };
+    return { level: 4, label: 'Fort', color: 'bg-green-500' };
   };
 
-  const closePinSetupOverlay = () => {
-    setShowPinSetupOverlay(false);
+  // Unified PIN modal helpers
+  const openPinModal = (mode, onConfirm, title) => {
+    setPinModalPin('');
+    setPinModalConfirm('');
+    setPinModalError('');
+    setPinModal({ mode, onConfirm, title });
   };
 
-  const handlePinSetup = async () => {
-    if (!newPin || !confirmPin) {
-      setPinSetupError('Veuillez remplir tous les champs');
-      return;
+  const closePinModal = () => {
+    setPinModal(null);
+    setPinModalPin('');
+    setPinModalConfirm('');
+    setPinModalError('');
+  };
+
+  const handlePinModalSubmit = async () => {
+    const mode = pinModal?.mode;
+    if (mode === 'setup' || mode === 'change') {
+      if (!pinModalPin || !pinModalConfirm) { setPinModalError('Veuillez remplir tous les champs'); return; }
+      if (pinModalPin.length < 4) { setPinModalError('Le PIN doit contenir au moins 4 caractères'); return; }
+      if (pinModalPin !== pinModalConfirm) { setPinModalError('Les PIN ne correspondent pas'); return; }
+    } else if (mode === 'confirm') {
+      if (!pinModalPin || pinModalPin.length < 4) { setPinModalError('Entrez votre PIN'); return; }
     }
-    
-    if (newPin.length < 4) {
-      setPinSetupError('Le PIN doit contenir au moins 4 caractères');
-      return;
-    }
-    
-    if (newPin !== confirmPin) {
-      setPinSetupError('Les PIN ne correspondent pas');
-      return;
-    }
-    
     try {
-      setPinSetupError('');
-      // ✅ PATCHED: Send raw PIN to Rust backend for Argon2id hashing
-      await invoke('set_profile_pin', { 
-        profileName: activeProfile, 
-        rawPin: newPin, 
-        inactivityMinutes: 5 
-      });
-      
-      // Mettre à jour l'état local
-      setProfileSecurity({ has_pin: true, inactivity_minutes: 5 });
-      
-      // Forcer le rechargement de la sécurité
-      await loadProfileSecurity(activeProfile);
-      
-      closePinSetupOverlay();
-      showToast('🔒 Code de sécurité enregistré avec succès ! Le chiffrement est maintenant disponible.');
-      
-      // Générer automatiquement un sel pour faciliter le processus
-      await generateNewSalt();
-      
-      // Ne pas verrouiller la session - juste laisser l'utilisateur continuer
-      // La session reste déverrouillée pour permettre l'utilisation immédiate du chiffrement
-      
+      setPinModalError('');
+      await pinModal.onConfirm(pinModalPin);
+      closePinModal();
     } catch (error) {
-      setPinSetupError(`Échec de l'activation: ${error}`);
-      console.error('Erreur activation PIN:', error);
+      setPinModalError(String(error));
     }
+  };
+
+  // Setup PIN flow
+  const handlePinSetup = () => {
+    openPinModal('setup', async (pin) => {
+      await invoke('set_profile_pin', { profileName: activeProfile, rawPin: pin, inactivityMinutes: 5 });
+      setProfileSecurity({ has_pin: true, inactivity_minutes: 5 });
+      await loadProfileSecurity(activeProfile, false);
+      showToast('PIN enregistré. Activation du chiffrement...');
+      await generateNewSalt();
+      await initEncryptionSystem();
+      showToast('PIN + chiffrement activés.');
+    }, 'Configuration du Code de Sécurité');
+  };
+
+  // Change PIN flow
+  const handlePinChange = () => {
+    openPinModal('change', async (pin) => {
+      await invoke('set_profile_pin', { profileName: activeProfile, rawPin: pin, inactivityMinutes: profileSecurity.inactivity_minutes || 5 });
+      showToast('PIN modifié.');
+    }, 'Changer le Code de Sécurité');
+  };
+
+  // Confirm PIN flow (for encryption actions)
+  const requestPinConfirmation = (title = 'Confirmation PIN') => {
+    return new Promise((resolve, reject) => {
+      openPinModal('confirm', async (pin) => { resolve(pin); }, title);
+      // If user closes modal without confirming, reject
+      const checkClosed = setInterval(() => {
+        if (!document.querySelector('[data-pin-modal]')) {
+          clearInterval(checkClosed);
+          reject(new Error('Opération annulée'));
+        }
+      }, 500);
+    });
   };
 
   // ── Encryption utilities ──
@@ -492,7 +535,7 @@ const App = () => {
       await invoke('init_encryption_system');
       showToast('Système de chiffrement initialisé');
     } catch (error) {
-      showToast(`Erreur d'initialisation: ${error}`);
+      showToast('Erreur d\'initialisation du chiffrement');
     }
   };
 
@@ -503,328 +546,195 @@ const App = () => {
       showToast('Nouveau sel généré');
       return salt;
     } catch (error) {
-      showToast(`Erreur de génération de sel: ${error}`);
+      showToast('Erreur de génération de sel');
       return null;
     }
   };
 
-  const testEncryption = async (testData = null) => {
+  const testEncryption = async () => {
     try {
-      if (!encryptionSalt) {
-        await generateNewSalt();
-      }
-      
-      // Utiliser une vraie adresse si disponible, sinon utiliser une adresse de test
-      const dataToTest = testData || (wallets.length > 0 
-        ? wallets[0].address 
-        : 'bc1qtestaddress1234567890');
-
-      if (!dataToTest) {
-        showToast('⚠️ Aucun wallet disponible pour le test');
+      // Test encryption entirely on the backend using session key
+      // No keys or plaintext cross IPC
+      const hasKey = await invoke('has_session_key');
+      if (!hasKey) {
+        showToast('Déverrouillez d\'abord la session pour tester le chiffrement');
         return false;
       }
 
-      // Derive key from PIN
-      let pinToUse = 'defaultpin';
-      if (profileSecurity.has_pin) {
-        // Si la session est déjà déverrouillée (PIN déjà validé), utiliser le PIN actuel
-        // Sinon, demander à l'utilisateur d'entrer son PIN
-        if (!isLocked && pinInput && pinInput.length > 0) {
-          // Session déjà déverrouillée, utiliser le PIN en mémoire
-          pinToUse = pinInput;
-        } else if (!isLocked) {
-          // Session déverrouillée mais pas de PIN en mémoire - ne devrait pas arriver
-          pinToUse = 'defaultpin';
-        } else {
-          // Session verrouillée - demander le PIN
-          showToast('⚠️ Déverrouillez d\'abord la session pour tester le chiffrement');
-          return false;
-        }
-      }
-      
-      const keyHex = await invoke('derive_encryption_key', {
-        pin: pinToUse,
-        salt: encryptionSalt
-      });
-      
-      // Encrypt the data
-      const encrypted = await invoke('encrypt_sensitive_data', {
-        data: dataToTest,
-        keyHex: keyHex,
-        salt: encryptionSalt
-      });
-      
-      // Decrypt to verify
-      const decrypted = await invoke('decrypt_sensitive_data', {
-        encryptedData: encrypted,
-        keyHex: keyHex
-      });
-      
-      // Vérifier que le déchiffrement a fonctionné
-      const success = decrypted === dataToTest;
+      const success = await invoke('test_encryption_backend');
 
-      setTestEncryptionResult({
-        original: dataToTest,
-        encrypted,
-        decrypted,
-        success,
-        timestamp: new Date().toISOString(),
-        walletName: wallets.length > 0 ? wallets[0].name : 'Test'
-      });
+      setTestEncryptionResult({ success, timestamp: new Date().toISOString() });
 
       if (success) {
-        showToast('✅ Chiffrement fonctionnel ! Vous pouvez maintenant sécuriser vos wallets.');
-
-        // Proposer d'activer le chiffrement pour tous les wallets ou de tester le chiffrement amélioré
-        setTimeout(() => {
-          const choice = window.confirm('Souhaitez-vous tester le chiffrement amélioré (nom + solde) ou activer le chiffrement de base ?');
-          if (choice) {
-            testEnhancedEncryption();
-          } else {
-            const shouldActivate = window.confirm('Souhaitez-vous activer le chiffrement pour tous vos wallets ?');
-            if (shouldActivate) {
-              activateEncryptionForAllWallets(pinToUse);
-            }
-          }
-        }, 1000);
+        showToast('Chiffrement fonctionnel.');
       } else {
-        showToast('❌ Échec du chiffrement : données corrompues');
+        showToast('Échec du chiffrement');
       }
 
       return success;
-
     } catch (error) {
-      showToast(`❌ Erreur de chiffrement: ${error}`);
-      setTestEncryptionResult({ error: error.toString() });
+      showToast('Erreur lors du test de chiffrement');
+      setTestEncryptionResult({ success: false, error: 'Test failed' });
       return false;
     }
   };
 
-  const activateEncryptionForAllWallets = async (pin) => {
+  const activateEncryptionForAllWallets = async () => {
     try {
-      if (!pin || pin.length === 0) {
-        showToast('⚠️ Veuillez entrer votre PIN');
+      const hasKey = await invoke('has_session_key');
+      if (!hasKey) {
+        showToast('Déverrouillez la session pour activer le chiffrement');
         return;
       }
 
-      showToast('🔐 Activation du chiffrement pour tous les wallets...');
+      showToast('Activation du chiffrement...');
 
-      // Chiffrer chaque wallet
-      const encryptedWallets = [];
+      let successCount = 0;
       for (const wallet of wallets) {
         try {
-          const encryptedWallet = await invoke('encrypt_wallet_data', {
-            wallet,
-            pin
-          });
-          encryptedWallets.push(encryptedWallet);
-
-          // Mettre à jour l'interface
+          // encrypt_wallet_data uses session key on backend
+          const encrypted = await invoke('encrypt_wallet_data', { data: wallet.address || '' });
           setWallets(prev => prev.map(w =>
-            w.id === wallet.id ? { 
-              ...w, 
-              encrypted: true,
-              name: '[ENCRYPTED]',
-              balance: null,
-              address: encryptedWallet.address,
-              encryption_salt: encryptedWallet.encryption_salt,
-              encrypted_name: encryptedWallet.encrypted_name,
-              encrypted_balance: encryptedWallet.encrypted_balance
-            } : w
+            w.id === wallet.id ? { ...w, encrypted: true, address: encrypted } : w
           ));
-
-        } catch (error) {
-          console.error(`Échec du chiffrement du wallet ${wallet.id}:`, error);
-          showToast(`⚠️ Échec du chiffrement pour ${wallet.name}`);
+          successCount++;
+        } catch (_) {
+          // Encryption failed for one wallet — continue with others
         }
       }
 
-      if (encryptedWallets.length > 0) {
-        showToast(`🔒 ${encryptedWallets.length} wallet(s) chiffré(s) avec succès !`);
-        // Sauvegarder les changements
-        try {
-          await invoke('save_profile', { name: activeProfile, theme });
-        } catch (e) {
-          console.error('Erreur sauvegarde:', e);
-        }
+      if (successCount > 0) {
+        showToast(`${successCount} wallet(s) chiffré(s)`);
+        try { await invoke('save_profile', { name: activeProfile, theme }); } catch (_) {}
       }
-
-    } catch (error) {
-      showToast(`❌ Erreur lors de l'activation globale: ${error}`);
-      console.error('Erreur activation globale:', error);
+    } catch (_) {
+      showToast('Erreur lors du chiffrement');
     }
   };
   
-  // Encrypt the current API key
+  // Encrypt the current API key using session key on backend
   const encryptCurrentApiKey = async () => {
+    if (!etherscanApiKey) { showToast('Aucune clé API à chiffrer'); return; }
+    if (!profileSecurity.has_pin) { showToast('Configurez d\'abord un PIN'); return; }
     try {
-      if (!etherscanApiKey) {
-        showToast('⚠️ Aucune clé API à chiffrer');
-        return;
-      }
-      
-      if (!profileSecurity.has_pin) {
-        showToast('⚠️ Veuillez d\'abord configurer un PIN de sécurité');
-        return;
-      }
-      
-      const pin = prompt('Entrez votre PIN pour chiffrer la clé API:');
-      if (!pin) {
-        showToast('❌ Opération annulée');
-        return;
-      }
-      
-      showToast('🔐 Chiffrement de la clé API...');
-      
-      const encryptedSettings = await invoke('encrypt_api_key_with_pin', {
-        api_key: etherscanApiKey,
-        pin: pin
-      });
-      
-      // Update our state
-      setEncryptedApiKey(encryptedSettings.encrypted_api_key);
-      setApiKeySalt(encryptedSettings.api_key_salt);
-      setEtherscanApiKey(''); // Clear the plaintext key
-      
-      // Save the encrypted settings
+      const hasKey = await invoke('has_session_key');
+      if (!hasKey) { showToast('Déverrouillez la session'); return; }
+      showToast('Chiffrement de la clé API...');
+      const encrypted = await invoke('encrypt_api_key_with_pin', { api_key: etherscanApiKey });
+      setEncryptedApiKey(encrypted);
+      setEtherscanApiKey('');
       await saveSettings();
-      
-      showToast('🔒 Clé API chiffrée avec succès !');
-      
-    } catch (error) {
-      showToast(`❌ Échec du chiffrement: ${error}`);
-      console.error('Erreur chiffrement clé API:', error);
-    }
-  };
-  
-  // Decrypt the API key for temporary use
-  const decryptApiKeyTemporarily = async () => {
-    try {
-      if (!isApiKeyEncrypted()) {
-        showToast('⚠️ La clé API n\'est pas chiffrée');
-        return;
-      }
-      
-      const pin = prompt('Entrez votre PIN pour déchiffrer temporairement la clé API:');
-      if (!pin) {
-        showToast('❌ Opération annulée');
-        return;
-      }
-      
-      showToast('🔓 Déchiffrement de la clé API...');
-      
-      const decryptedKey = await invoke('decrypt_api_key_with_pin', {
-        encrypted_key: encryptedApiKey,
-        salt: apiKeySalt,
-        pin: pin
-      });
-      
-      // Show the key temporarily (for copying)
-      const shouldShow = window.confirm('La clé API a été déchiffrée. Voulez-vous la voir temporairement ?');
-      if (shouldShow) {
-        alert(`Clé API déchiffrée:\n\n${decryptedKey}\n\n(Cette clé sera visible jusqu'à ce que vous quittiez cette boîte de dialogue)`);
-      }
-      
-      showToast('🔓 Clé API déchiffrée temporairement');
-      
-    } catch (error) {
-      showToast(`❌ Échec du déchiffrement: ${error}`);
-      console.error('Erreur déchiffrement clé API:', error);
-    }
-  };
-  
-  // Test the API key encryption system
-  const testApiKeyEncryption = async () => {
-    try {
-      const testPin = prompt('Entrez un PIN de test pour le chiffrement de clé API:');
-      if (!testPin || testPin.length < 4) {
-        showToast('❌ PIN trop court (minimum 4 caractères)');
-        return;
-      }
-      
-      const testApiKey = prompt('Entrez une clé API de test (ou laissez vide pour utiliser une clé par défaut):') || 'test_api_key_1234567890';
-      
-      showToast('🧪 Test du chiffrement de clé API...');
-      
-      const result = await invoke('test_api_key_encryption', { 
-        api_key: testApiKey, 
-        pin: testPin 
-      });
-      
-      showToast(`✅ Test clé API réussi: ${result.substring(0, 50)}...`);
-      console.log('Résultat complet du test clé API:', result);
-      
-    } catch (error) {
-      showToast(`❌ Échec du test clé API: ${error}`);
-      console.error('Erreur test chiffrement clé API:', error);
-    }
-  };
-  
-  // Test the enhanced encryption system
-  const testEnhancedEncryption = async () => {
-    try {
-      const testPin = prompt('Entrez un PIN de test pour le chiffrement amélioré:');
-      if (!testPin || testPin.length < 4) {
-        showToast('❌ PIN trop court (minimum 4 caractères)');
-        return;
-      }
-      
-      showToast('🧪 Test du chiffrement amélioré...');
-      
-      const result = await invoke('test_enhanced_encryption', { pin: testPin });
-      
-      showToast(`✅ Test réussi: ${result.substring(0, 50)}...`);
-      console.log('Résultat complet du test:', result);
-      
-    } catch (error) {
-      showToast(`❌ Échec du test: ${error}`);
-      console.error('Erreur test chiffrement:', error);
+      showToast('Clé API chiffrée.');
+    } catch (_) {
+      showToast('Erreur de chiffrement');
     }
   };
 
-  const loadProfileSecurity = async (profileName) => {
+  // Decrypt the API key for temporary use (uses unified PIN modal)
+  const decryptApiKeyTemporarily = async () => {
+    if (!isApiKeyEncrypted()) { showToast('La clé API n\'est pas chiffrée'); return; }
+    try {
+      const pin = await requestPinConfirmation('Déchiffrer la clé API');
+      const decryptedKey = await invoke('decrypt_api_key_with_pin', { encrypted_key: encryptedApiKey, salt: apiKeySalt, pin });
+      // Copy directly to clipboard without displaying the key
+      try {
+        await navigator.clipboard.writeText(decryptedKey);
+        showToast('Clé API copiée dans le presse-papier');
+        setTimeout(() => { navigator.clipboard.writeText('').catch(() => {}); }, 10000);
+      } catch (_) {
+        showToast('Impossible de copier la clé');
+      }
+    } catch (error) {
+      if (String(error) !== 'Error: Opération annulée') showToast('Échec du déchiffrement');
+    }
+  };
+
+  const loadProfileSecurity = async (profileName, shouldLock = true) => {
     try {
       const sec = await invoke('get_profile_security', { profileName });
       setProfileSecurity(sec);
-      // Ne pas verrouiller automatiquement la session
-      // L'utilisateur peut verrouiller manuellement si nécessaire
       setPinInput('');
       setPinError('');
-    } catch(_) { setProfileSecurity({ has_pin: false, inactivity_minutes: 0 }); }
+      setPinAttemptInfo(null);
+      if (shouldLock && sec.has_pin) {
+        setIsLocked(true);
+        setTheme('dark'); // Force neutral theme while locked — hide profile identity
+      } else {
+        setTheme(savedThemeRef.current); // No PIN — apply saved theme
+      }
+    } catch(_) { setProfileSecurity({ has_pin: false, inactivity_minutes: 0 }); setTheme(savedThemeRef.current); }
+  };
+
+  const refreshPinStatus = async () => {
+    try {
+      const status = await invoke('get_pin_status', { profileName: activeProfile });
+      setPinAttemptInfo({ failed: status.failed_attempts, max: status.max_attempts, retry_secs: status.retry_after_secs, is_locked: status.is_locked });
+    } catch(_) {}
   };
 
   const handleUnlock = async () => {
     if (!pinInput || pinInput.length === 0) { setPinError('Entrez votre PIN'); return; }
     try {
-      // ✅ PATCHED: Send raw PIN for Argon2id verification + rate limiting
       const ok = await invoke('verify_profile_pin', { profileName: activeProfile, rawPin: pinInput });
       if (ok) {
         setIsLocked(false);
         setPinInput('');
         setPinError('');
+        setPinAttemptInfo(null);
+        setTheme(savedThemeRef.current); // Restore profile theme after unlock
         resetInactivityTimer();
+        // Reload data after unlock
+        loadCategories();
+        loadWallets();
+        loadSettings();
+        loadPrices();
       } else {
-        setPinError('Code incorrect');
         setPinInput('');
+        await refreshPinStatus();
+        setPinError('Code incorrect');
       }
     } catch(err) {
       const errMsg = String(err);
+      setPinInput('');
+      await refreshPinStatus();
       if (errMsg.includes('verrouillé') || errMsg.includes('tentatives')) {
         setPinError(errMsg);
       } else {
         setPinError('Erreur vérification');
       }
-      setPinInput('');
     }
+  };
+
+  // Clear all sensitive state from memory (called on lock)
+  const clearSensitiveState = () => {
+    setWallets([]);
+    setEtherscanApiKey('');
+    setMoneroWalletData({});
+    setEncryptionSalt('');
+    setTestEncryptionResult(null);
+    setQrOverlay(null);
+    setConfirmModal(null);
+    setPinInput('');
+    // Lock session key on backend
+    invoke('lock_session').catch(() => {});
   };
 
   const resetInactivityTimer = () => {
     if (inactivityTimerRef.current) clearTimeout(inactivityTimerRef.current);
+    if (inactivityWarningRef.current) clearTimeout(inactivityWarningRef.current);
+    setShowInactivityWarning(false);
     if (profileSecurity.has_pin && profileSecurity.inactivity_minutes > 0 && !isLocked) {
+      const totalMs = profileSecurity.inactivity_minutes * 60 * 1000;
+      const warningMs = Math.max(totalMs - 30000, totalMs * 0.8); // 30s before or 80% whichever is later
+      inactivityWarningRef.current = setTimeout(() => {
+        setShowInactivityWarning(true);
+      }, warningMs);
       inactivityTimerRef.current = setTimeout(() => {
         setIsLocked(true);
-        setPinInput('');
-      }, profileSecurity.inactivity_minutes * 60 * 1000);
+        setTheme('dark'); // Hide profile theme on lock
+        clearSensitiveState();
+        setShowInactivityWarning(false);
+      }, totalMs);
     }
   };
 
@@ -838,6 +748,8 @@ const App = () => {
     return () => {
       events.forEach(e => document.removeEventListener(e, handler));
       if (inactivityTimerRef.current) clearTimeout(inactivityTimerRef.current);
+      if (inactivityWarningRef.current) clearTimeout(inactivityWarningRef.current);
+      setShowInactivityWarning(false);
     };
   }, [profileSecurity, isLocked]);
 
@@ -845,7 +757,7 @@ const App = () => {
   const handleAddressMouseDown = (address) => {
     if (!address) return;
     const timer = setTimeout(async () => {
-      try { await navigator.clipboard.writeText(address); setCopiedAddress(address); showToast('Adresse copiée ✓'); setTimeout(() => setCopiedAddress(null), 2000); } catch (e) { console.error(e); }
+      try { await navigator.clipboard.writeText(address); setCopiedAddress(address); showToast('Adresse copiée ✓'); setTimeout(() => setCopiedAddress(null), 2000); setTimeout(() => { navigator.clipboard.writeText('').catch(() => {}); }, 10000); } catch (e) { /* clipboard error */ }
     }, 600);
     setLongPressTimer(timer);
   };
@@ -858,7 +770,6 @@ const App = () => {
       // Les wallets ont maintenant category_id au lieu de category
       setWallets(w);
     } catch (e) {
-      console.error('Erreur chargement wallets:', e);
       showToast('❌ Erreur chargement wallets', 3000);
     }
   };
@@ -882,22 +793,22 @@ const App = () => {
       setLastPriceUpdate(new Date());
       setApiStatus({ binance: d.btc?.usd > 0, forex: d.forex_jpy_per_usd > 0 });
     } catch (e) {
-      console.error('Erreur lors du chargement des prix:', e);
       setApiStatus(prev => ({ binance: prev.binance === true ? true : false, forex: prev.forex === true ? true : false }));
       showToast('❌ Erreur de chargement des prix. Vérifiez votre connexion.', 3000);
     }
   }, []);
-  const loadAltcoinsList = useCallback(async () => { try { setAltcoinsList(await invoke('get_altcoins_list')); } catch (e) { console.error(e); } }, []);
+  const loadAltcoinsList = useCallback(async () => { try { setAltcoinsList(await invoke('get_altcoins_list')); } catch (e) { /* altcoins list load error */ } }, []);
   const loadSettings = useCallback(async () => {
     try {
       const d = await invoke('get_settings');
       setEtherscanApiKey(d.etherscan_api_key || '');
       setEncryptedApiKey(d.encrypted_api_key || null);
       setApiKeySalt(d.api_key_salt || null);
-      setTheme(d.theme || 'dark');
-    } catch (e) { console.error(e); }
+      savedThemeRef.current = d.theme || 'dark';
+      // Theme is NEVER applied here — only by security check, unlock handler, or user click
+    } catch (e) { /* settings load error */ }
   }, []);
-  const loadProfiles = useCallback(async () => { try { setProfiles(await invoke('list_profiles')); } catch (e) { console.error(e); } }, []);
+  const loadProfiles = useCallback(async () => { try { setProfiles(await invoke('list_profiles')); } catch (e) { /* profiles load error */ } }, []);
   const saveSettings = async () => {
     try {
       await invoke('save_settings', {
@@ -910,14 +821,14 @@ const App = () => {
       });
       setMenuView('main');
       showToast('Paramètres sauvegardés ✓');
-    } catch (e) { console.error(e); }
+    } catch (e) { /* settings save error */ }
   };
 
   // ── Profiles ──
   const autoSaveProfile = useCallback(async () => {
     if (isAnonymous) return;
     const saveName = activeProfile === 'Auto' ? '__autosave__' : activeProfile;
-    try { await invoke('save_profile', { name: saveName, theme }); setSavePulse(true); setTimeout(() => setSavePulse(false), 1500); } catch (e) { console.error('autosave:', e); }
+    try { await invoke('save_profile', { name: saveName, theme }); setSavePulse(true); setTimeout(() => setSavePulse(false), 1500); } catch (e) { /* autosave error */ }
   }, [isAnonymous, activeProfile, theme]);
   const handleSaveProfile = async () => {
     if (!newProfileName.trim()) return;
@@ -930,7 +841,7 @@ const App = () => {
       setIsAnonymous(false);
       try { await invoke('set_setting', { key: 'last_profile', value: pName }); } catch(e) {}
       showToast(`Profil "${pName}" sauvegardé ✓`);
-    } catch (e) { console.error(e); showToast('Erreur sauvegarde profil ✗'); }
+    } catch (e) { showToast('Erreur sauvegarde profil ✗'); }
   };
   const handleLoadProfile = async (name) => {
     setShowMenuDrawer(false);
@@ -940,23 +851,33 @@ const App = () => {
       // Always auto-save current state before loading another profile
       if (!isAnonymous) {
         const saveName = activeProfile === 'Auto' ? '__autosave__' : activeProfile;
-        try { await invoke('save_profile', { name: saveName, theme }); } catch(e) { console.error('pre-save:', e); }
+        try { await invoke('save_profile', { name: saveName, theme }); } catch(e) { /* pre-save error */ }
       }
       const result = await invoke('load_profile', { name });
-      await loadCategories();
-      await loadWallets();
       setActiveProfile(name);
       setIsAnonymous(false);
-      if (result?.theme) setTheme(result.theme);
+      if (result?.theme) savedThemeRef.current = result.theme;
       try { await invoke('set_setting', { key: 'last_profile', value: name }); } catch(e) {}
-      showToast(`Profil "${name}" chargé ✓`);
-      await loadProfileSecurity(name);
-    } catch (e) { console.error(e); showToast('Erreur chargement profil ✗'); }
+      // Check security BEFORE loading sensitive data
+      const sec = await invoke('get_profile_security', { profileName: name }).catch(() => ({ has_pin: false, inactivity_minutes: 0 }));
+      setProfileSecurity(sec);
+      if (sec.has_pin) {
+        setIsLocked(true);
+        setTheme('dark');
+        setWallets([]);
+        showToast(`Profil "${name}" — déverrouillage requis`);
+      } else {
+        setTheme(savedThemeRef.current);
+        await loadCategories();
+        await loadWallets();
+        showToast(`Profil "${name}" chargé ✓`);
+      }
+    } catch (e) { showToast('Erreur chargement profil ✗'); }
   };
   const handleDeleteProfile = async (name) => {
     setShowMenuDrawer(false);
     if (!await showConfirm(`Supprimer définitivement le profil "${name}" ?`)) return;
-    try { await invoke('delete_profile', { name }); await loadProfiles(); showToast(`Profil "${name}" supprimé`); if (activeProfile === name) setActiveProfile('Auto'); } catch (e) { console.error(e); showToast('Erreur suppression ✗'); }
+    try { await invoke('delete_profile', { name }); await loadProfiles(); showToast(`Profil "${name}" supprimé`); if (activeProfile === name) setActiveProfile('Auto'); } catch (e) { showToast('Erreur suppression ✗'); }
   };
   const handleReset = async () => {
     setShowMenuDrawer(false);
@@ -978,7 +899,7 @@ const App = () => {
       setIsAnonymous(false);
       try { await invoke('set_setting', { key: 'last_profile', value: newName }); } catch(e) {}
       showToast(`Nouveau profil "${newName}" créé ✓`);
-    } catch (e) { console.error(e); }
+    } catch (e) { /* profile creation error */ }
   };
   const startAnonymous = async () => {
     setShowMenuDrawer(false);
@@ -994,7 +915,7 @@ const App = () => {
       setIsAnonymous(true);
       setTheme('dark'); // Anonymous always starts in dark mode
       showToast('Profil anonyme — non sauvegardé');
-    } catch (e) { console.error(e); }
+    } catch (e) { /* anonymous profile error */ }
   };
 
   // ── Wallet ops ──
@@ -1018,14 +939,12 @@ const App = () => {
               });
             }
           } catch (e) {
-            console.error('Erreur lors de la récupération de la balance pour', w.asset, ':', e);
             showToast(`⚠️ Erreur de balance pour ${w.asset.toUpperCase()}`, 2000);
           }
         }
       }
       await loadWallets();
     } catch (e) {
-      console.error('Erreur lors du rafraîchissement:', e);
       showToast('❌ Erreur lors du rafraîchissement des données', 3000);
     }
     setRefreshing(false);
@@ -1033,11 +952,10 @@ const App = () => {
 
   const saveWalletEdit = async (walletId) => {
     const w = wallets.find(x => x.id === walletId);
-    if (!w) { console.warn('[saveWalletEdit] wallet not found:', walletId); return; }
+    if (!w) { return; }
     const trimmedAddr = (editData.address || '').trim();
     const addrChanged = trimmedAddr !== (w.address || '').trim();
     const newName = editData.name || w.name;
-    console.log(`[saveWalletEdit] id=${walletId} name="${newName}" addr="${trimmedAddr}" addrChanged=${addrChanged}`);
     await invoke('update_wallet', { id: walletId, name: newName, address: trimmedAddr, balance: editData.balance !== '' ? parseFloat(editData.balance) : w.balance });
     await loadWallets();
     setEditMode(null); editWalletRef.current = null;
@@ -1049,7 +967,7 @@ const App = () => {
     }
     if (addrChanged && trimmedAddr && !manualOnlyAssets.includes(w.asset)) {
       setLoading(prev => ({ ...prev, [walletId]: true }));
-      try { await loadPrices(); const b = await invoke('fetch_balance', { asset: w.asset, address: trimmedAddr }); if (b != null) { await invoke('update_wallet', { id: walletId, name: newName, address: trimmedAddr, balance: b }); await loadWallets(); autoSaveProfile(); } } catch (e) { console.error(e); }
+      try { await loadPrices(); const b = await invoke('fetch_balance', { asset: w.asset, address: trimmedAddr }); if (b != null) { await invoke('update_wallet', { id: walletId, name: newName, address: trimmedAddr, balance: b }); await loadWallets(); autoSaveProfile(); } } catch (e) { /* balance fetch error */ }
       setLoading(prev => ({ ...prev, [walletId]: false }));
     }
   };
@@ -1065,11 +983,10 @@ const App = () => {
       const altcoin = altcoinsList.find(a => a.symbol === asset);
       showToast(`✅ ${altcoin?.name || asset} ajouté à ${category?.name || 'la catégorie'}`, 2000);
     } catch (e) {
-      console.error(e);
       showToast('❌ Erreur lors de l\'ajout', 3000);
     }
   };
-  const deleteWallet = async (id) => { try { await invoke('delete_wallet', { id }); await loadWallets(); setEditMode(null); editWalletRef.current = null; autoSaveProfile(); } catch (e) { console.error(e); } };
+  const deleteWallet = async (id) => { try { await invoke('delete_wallet', { id }); await loadWallets(); setEditMode(null); editWalletRef.current = null; autoSaveProfile(); } catch (e) { /* wallet delete error */ } };
   const handleAddToken = async (categoryId, tokenSymbol, tokenName) => {
     await addNewWallet(categoryId, tokenSymbol, `${tokenName} Wallet`);
   };
@@ -1078,35 +995,25 @@ const App = () => {
     let cancelled = false;
 
     (async () => {
-      await loadSettings();
+      // ── SECURITY: Always start on a CLEAN default_template ──
+      // 1. Reset wallets to empty defaults (no addresses)
+      await invoke('reset_wallets').catch(() => {});
+      // 2. Save clean default_template with dark theme
+      await invoke('save_profile', { name: 'default_template', theme: 'dark' }).catch(() => {});
+      // 3. Load the clean default_template
+      await invoke('load_profile', { name: 'default_template' }).catch(() => {});
+
+      if (cancelled) return;
+      setActiveProfile('default_template');
+
+      // Load non-sensitive metadata
       await loadAltcoinsList();
-      await loadCategories();
       await loadProfiles();
 
-      // Always load default_template at startup
-      try {
-        const profs = await invoke('list_profiles');
-        if (profs.includes('default_template')) {
-          const result = await invoke('load_profile', { name: 'default_template' });
-          if (!cancelled) {
-            setActiveProfile('default_template');
-            if (result?.theme) setTheme(result.theme);
-          }
-        } else {
-          // First launch — save initial state as default_template
-          await invoke('save_profile', { name: 'default_template', theme: 'dark' });
-          if (!cancelled) { setActiveProfile('default_template'); }
-        }
-      } catch (e) {
-        console.error('restore profile:', e);
-      }
-
-      if (!cancelled) {
-        await loadCategories();
-        await loadWallets();
-        await loadPrices();
-        await loadProfileSecurity(activeProfile || 'default_template');
-      }
+      // Load clean default_template wallets (empty addresses) + categories
+      await loadCategories();
+      await loadWallets();
+      await loadPrices();
     })();
 
     return () => { cancelled = true; };
@@ -1149,7 +1056,7 @@ const App = () => {
     wallets.forEach(w => {
       if (w.address && w.address.trim() !== '') {
         invoke('start_monitoring_wallet', { walletId: w.id, address: w.address, asset: w.asset, walletName: w.name || w.asset.toUpperCase() })
-          .catch(err => console.error('start_monitoring:', err));
+          .catch(() => { /* monitoring start error */ });
       }
     });
   }, [wallets, monitoringEnabled]);
@@ -1213,7 +1120,7 @@ const App = () => {
           playSound('new');
           setPendingBarHidden(false);
           newTxs.forEach(tx => {
-            showToast(`🔔 Nouvelle TX: +${tx.amount.toFixed(6)} ${tx.asset.toUpperCase()}`, 5000);
+            showToast(hideBalances ? `Nouvelle TX ${tx.asset.toUpperCase()}` : `Nouvelle TX: +${tx.amount.toFixed(6)} ${tx.asset.toUpperCase()}`, 5000);
           });
         }
 
@@ -1222,7 +1129,7 @@ const App = () => {
         if (justConfirmed.length > 0) {
           playSound('confirmed');
           justConfirmed.forEach(tx => {
-            showToast(`✅ TX confirmée: +${tx.amount.toFixed(6)} ${tx.asset.toUpperCase()}`, 5000);
+            showToast(hideBalances ? `TX confirmée ${tx.asset.toUpperCase()}` : `TX confirmée: +${tx.amount.toFixed(6)} ${tx.asset.toUpperCase()}`, 5000);
           });
         }
 
@@ -1314,7 +1221,7 @@ const App = () => {
             </button>
             <button onClick={confirmModal.onConfirm}
               className="px-4 py-2 rounded-lg text-sm bg-amber-600 text-white hover:bg-amber-500 transition-colors">
-              Confirmer
+              {confirmModal.confirmLabel || 'Confirmer'}
             </button>
           </div>
         </div>
@@ -1385,7 +1292,7 @@ const App = () => {
         ) : (
           <div onClick={handleUnlockBalance}
             className={`relative w-full px-3 py-2 rounded text-sm border ${T.inputBorder} cursor-pointer overflow-hidden`}
-            style={{ background: `repeating-linear-gradient(-45deg, transparent, transparent 4px, ${theme === 'dark' || theme === 'noctali' || theme === 'lunarpunk' ? 'rgba(255,255,255,0.03)' : theme === 'sepia' ? 'rgba(139,115,85,0.06)' : 'rgba(0,0,0,0.04)'} 4px, ${theme === 'dark' || theme === 'noctali' || theme === 'lunarpunk' ? 'rgba(255,255,255,0.03)' : theme === 'sepia' ? 'rgba(139,115,85,0.06)' : 'rgba(0,0,0,0.04)'} 8px)` }}>
+            style={{ background: `repeating-linear-gradient(-45deg, transparent, transparent 4px, ${theme === 'dark' || theme === 'noctali' || theme === 'lunarpunk' ? 'rgba(255,255,255,0.03)' : theme === 'sepia' ? 'rgba(139,115,85,0.06)' : theme === 'solarpunk' ? 'rgba(42,96,48,0.06)' : 'rgba(0,0,0,0.04)'} 4px, ${theme === 'dark' || theme === 'noctali' || theme === 'lunarpunk' ? 'rgba(255,255,255,0.03)' : theme === 'sepia' ? 'rgba(139,115,85,0.06)' : theme === 'solarpunk' ? 'rgba(42,96,48,0.06)' : 'rgba(0,0,0,0.04)'} 8px)` }}>
             <div className="flex items-center justify-between">
               <span className={`${T.textFaint} opacity-60`}>{editData.balance || '–'} {cfg.symbol}</span>
               <span className={`text-xs ${T.textMuted} font-medium`}>modifier</span>
@@ -1407,7 +1314,6 @@ const App = () => {
       const cats = await invoke('get_categories');
       setCategories(cats);
     } catch (e) {
-      console.error('Erreur chargement catégories:', e);
       showToast('❌ Erreur chargement catégories', 3000);
     }
   };
@@ -1422,7 +1328,7 @@ const App = () => {
         await invoke('update_category', { id: catId, name: trimmed, color: cat.color, barColor: cat.bar_color });
         await loadCategories();
         autoSaveProfile();
-      } catch (e) { console.error(e); showToast('❌ Erreur renommage', 2000); }
+      } catch (e) { showToast('❌ Erreur renommage', 2000); }
     }
     setEditingCatId(null);
   };
@@ -1446,7 +1352,7 @@ const App = () => {
       const newest = cats[cats.length - 1];
       if (newest) { setEditingCatId(newest.id); setCatNameDraft(newest.name); }
       autoSaveProfile();
-    } catch (e) { console.error(e); showToast('❌ Erreur création', 2000); }
+    } catch (e) { showToast('❌ Erreur création', 2000); }
   };
 
   const deleteCategory = async (catId) => {
@@ -1460,7 +1366,7 @@ const App = () => {
       await loadCategories();
       await loadWallets();
       autoSaveProfile();
-    } catch (e) { console.error(e); showToast('❌ Erreur suppression', 2000); }
+    } catch (e) { showToast('❌ Erreur suppression', 2000); }
   };
 
   // ── Category reorder by arrows ──
@@ -1484,7 +1390,7 @@ const App = () => {
     // Optimistic UI
     const reordered = ids.map((id, i) => ({ ...categories.find(c => c.id === id), display_order: i }));
     setCategories(reordered);
-    try { await invoke('reorder_categories', { categoryIds: ids }); } catch (e) { console.error(e); await loadCategories(); }
+    try { await invoke('reorder_categories', { categoryIds: ids }); } catch (e) { await loadCategories(); }
   };
 
   // Double-click timers
@@ -1519,7 +1425,7 @@ const App = () => {
     const handleQuickCopy = async (e) => {
       e.stopPropagation();
       if (!wallet.address) return;
-      try { await navigator.clipboard.writeText(wallet.address); setCopiedAddress(wallet.address); setTimeout(() => setCopiedAddress(null), 1500); } catch (err) { console.error(err); }
+      try { await navigator.clipboard.writeText(wallet.address); setCopiedAddress(wallet.address); setTimeout(() => setCopiedAddress(null), 1500); setTimeout(() => { navigator.clipboard.writeText('').catch(() => {}); }, 10000); } catch (err) { /* clipboard error */ }
     };
 
     return (
@@ -1580,22 +1486,23 @@ const App = () => {
     return <WalletRow key={w.id} wallet={w} />;
   };
   
-  // Helper to decrypt a wallet for display
+  // Helper to decrypt a wallet for display (uses session key on backend)
   const decryptWalletForDisplay = async (wallet) => {
     if (!isWalletEncrypted(wallet)) {
       return wallet;
     }
-    
+
     try {
-      const decrypted = await invoke('decrypt_wallet_data', {
-        encryptedWallet: wallet,
-        pin: pinInput
-      });
-      return decrypted;
-    } catch (error) {
-      console.error('Échec du déchiffrement:', error);
-      showToast('❌ Échec du déchiffrement du wallet', 3000);
-      return wallet;
+      const hasKey = await invoke('has_session_key');
+      if (!hasKey) {
+        return wallet; // Session locked, show encrypted data
+      }
+      const decryptedAddr = wallet.address && wallet.address !== '[ENCRYPTED]'
+        ? await invoke('decrypt_wallet_data', { encryptedData: wallet.address })
+        : wallet.address;
+      return { ...wallet, address: decryptedAddr };
+    } catch (_) {
+      return wallet; // Decryption failed, show encrypted data
     }
   };
 
@@ -1613,7 +1520,7 @@ const App = () => {
     const handleQuickCopy = async (e) => {
       e.stopPropagation();
       if (!wallet.address) return;
-      try { await navigator.clipboard.writeText(wallet.address); setCopiedAddress(wallet.address); setTimeout(() => setCopiedAddress(null), 1500); } catch (err) { console.error(err); }
+      try { await navigator.clipboard.writeText(wallet.address); setCopiedAddress(wallet.address); setTimeout(() => setCopiedAddress(null), 1500); setTimeout(() => { navigator.clipboard.writeText('').catch(() => {}); }, 10000); } catch (err) { /* clipboard error */ }
     };
 
     return (
@@ -1682,23 +1589,22 @@ const App = () => {
     if (etherscanApiKey) {
       return etherscanApiKey;
     }
-    
-    // If we have encrypted key and salt, try to decrypt
-    if (encryptedApiKey && apiKeySalt && pinInput) {
+
+    // If we have encrypted key, decrypt via session key on backend
+    if (encryptedApiKey && apiKeySalt) {
       try {
+        const hasKey = await invoke('has_session_key');
+        if (!hasKey) return '';
         const decryptedKey = await invoke('decrypt_api_key_with_pin', {
           encrypted_key: encryptedApiKey,
-          salt: apiKeySalt,
-          pin: pinInput
+          salt: apiKeySalt
         });
         return decryptedKey;
-      } catch (error) {
-        console.error('Échec du déchiffrement de la clé API:', error);
-        showToast('❌ Échec du déchiffrement de la clé API', 3000);
+      } catch (_) {
         return '';
       }
     }
-    
+
     // No API key available
     return '';
   };
@@ -1713,6 +1619,7 @@ const App = () => {
       {/* Noctali starfield + moon + images */}
       {theme === 'noctali' && <><NoctaliStarfield /><NoctaliMoon /><NoctaliImages /></>}
       {theme === 'lunarpunk' && <><LunarPunkDust /><LunarPunkDunes /><LunarPunkMoon /></>}
+      {theme === 'solarpunk' && <><SolarpunkBackground /><SolarpunkPollen /></>}
       <ConfirmModal />
 
       {/* ── Bloomberg-style Price Terminal (Ctrl+Shift+P / long-press API) ── */}
@@ -1919,10 +1826,10 @@ const App = () => {
                 <QRCodeSVG value={qrOverlay.address} size={200} level="M" />
               </div>
             </div>
-            <p className={`font-mono text-xs ${T.textMuted} break-all select-all mb-5 px-2 leading-relaxed`}>{qrOverlay.address}</p>
+            <p className={`font-mono text-xs ${T.textMuted} break-all mb-5 px-2 leading-relaxed`}>{maskAddress(qrOverlay.address)}</p>
             <div className="flex gap-2 justify-center">
               <button onClick={async () => {
-                try { await navigator.clipboard.writeText(qrOverlay.address); showToast('Adresse copiée ✓'); } catch(e) { console.error(e); }
+                try { await navigator.clipboard.writeText(qrOverlay.address); showToast('Adresse copiée ✓'); setTimeout(() => { navigator.clipboard.writeText('').catch(() => {}); }, 10000); } catch(e) { /* clipboard error */ }
               }} className="px-5 py-2.5 bg-amber-500/20 text-amber-500 rounded-lg text-sm font-medium hover:bg-amber-500/30 transition-colors">
                 Copier l'adresse
               </button>
@@ -1944,7 +1851,7 @@ const App = () => {
               </button>
               <div>
                 <h1 className="font-bold text-xl select-none cursor-default" onClick={(e) => { if (e.detail === 3) setShowWhitepaper(true); }}>JANUS Monitor</h1>
-                <p className={`text-xs ${T.textMuted}`}>Réserve sécurisée · <span className={T.textFaint}>v2.2</span> · <span className={T.accentMuted}>{activeProfile}</span></p>
+                <p className={`text-xs ${T.textMuted}`}>Réserve sécurisée · <span className={T.textFaint}>v2.2.1</span> · <span className={T.accentMuted}>{activeProfile}</span></p>
               </div>
             </div>
             <div className="flex items-center gap-2">
@@ -2214,6 +2121,8 @@ const App = () => {
             <span>JANUS — <span style={{ color: '#F4D995' }}>Les anneaux brillent au clair de lune</span> · Extraction 60% · Recapitalisation 40%</span>
           ) : theme === 'lunarpunk' ? (
             <span>JANUS — <span style={{ color: '#6d8ff8' }}>Beyond the dunes, the signal persists</span> · Extraction 60% · Recapitalisation 40%</span>
+          ) : theme === 'solarpunk' ? (
+            <span>JANUS — <span style={{ color: '#2a7a1a' }}>La lumière nourrit ce que l'ombre protège</span> · Extraction 60% · Recapitalisation 40%</span>
           ) : (
             'JANUS — Extraction 60% • Recapitalisation 40%'
           )}
@@ -2285,7 +2194,7 @@ const App = () => {
                 </svg>
               </button>
               {profileSecurity.has_pin && (
-                <button onClick={() => { setShowMenuDrawer(false); setIsLocked(true); setPinInput(''); }}
+                <button onClick={() => { setShowMenuDrawer(false); setIsLocked(true); setTheme('dark'); clearSensitiveState(); setPinInput(''); }}
                   className={`w-full px-4 py-3 ${T.inputBg} rounded-lg text-sm border border-amber-500/20 transition-colors hover:border-amber-500/40 flex items-center gap-3`}>
                   <span className="text-base">🔐</span>
                   <div className="text-left flex-1"><div className="font-medium text-amber-500">Verrouiller maintenant</div></div>
@@ -2373,7 +2282,7 @@ const App = () => {
                   {/* Special Edition dropdown */}
                   <details className={`group rounded-lg border ${T.inputBorder} ${T.inputBg} overflow-hidden`}>
                     <summary className={`flex items-center justify-between px-3 py-2.5 cursor-pointer text-sm ${T.textMuted} select-none hover:opacity-80`}>
-                      <span>✨ Spécial Édition {(theme === 'noctali' || theme === 'lunarpunk') && <span className={T.accent}>●</span>}</span>
+                      <span>✨ Spécial Édition {(theme === 'noctali' || theme === 'lunarpunk' || theme === 'solarpunk') && <span className={T.accent}>●</span>}</span>
                       <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
                         className={`${T.textFaint} transition-transform group-open:rotate-90`}>
                         <polyline points="9 18 15 12 9 6"/>
@@ -2383,6 +2292,7 @@ const App = () => {
                       {[
                         { key: 'noctali', label: '🌑 Noctali', desc: 'v1.0 — Umbreon starfield', accent: '#F4D995' },
                         { key: 'lunarpunk', label: '🔮 Lunar Punk', desc: 'v2.2 — Désert dystopique', accent: '#6d8ff8' },
+                        { key: 'solarpunk', label: '🌿 Solarpunk', desc: 'v2.2.1 — Nature meets technology', accent: '#7BC74D' },
                       ].map(opt => (
                         <button key={opt.key} onClick={() => setTheme(opt.key)}
                           className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm border transition-all ${theme === opt.key
@@ -2440,7 +2350,6 @@ const App = () => {
                           await invoke('set_monitoring_enabled', { enabled });
                           showToast(enabled ? '✅ Monitoring activé' : '⚠️ Monitoring désactivé', 2000);
                         } catch (err) {
-                          console.error('Erreur toggle monitoring:', err);
                         }
                       }}
                       className="w-4 h-4 text-amber-500 rounded focus:ring-2 focus:ring-amber-500"
@@ -2465,16 +2374,33 @@ const App = () => {
                 {/* Current status */}
                 <div className={`flex items-center gap-3 px-3 py-3 rounded-lg border ${profileSecurity.has_pin ? 'border-green-500/30 bg-green-500/5' : `${T.inputBorder} ${T.inputBg}`}`}>
                   <span className="text-lg">{profileSecurity.has_pin ? '🔒' : '🔓'}</span>
-                  <div>
+                  <div className="flex-1">
                     <div className={`text-sm font-medium ${profileSecurity.has_pin ? 'text-green-500' : T.textMuted}`}>
                       {profileSecurity.has_pin ? 'Profil protégé' : 'Profil non protégé'}
                     </div>
                     <div className={`text-xs ${T.textFaint}`}>{activeProfile}</div>
                   </div>
+                  {profileSecurity.has_pin && encryptionSalt && (
+                    <span className="text-xs text-green-500/70 px-2 py-0.5 rounded border border-green-500/20 bg-green-500/5">AES-256</span>
+                  )}
                 </div>
 
                 {profileSecurity.has_pin ? (
                   <>
+                    {/* PIN + Encryption simple status row */}
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className={`p-3 rounded-lg border ${T.inputBorder} ${T.inputBg}`}>
+                        <div className={`text-xs ${T.textFaint} mb-1`}>PIN</div>
+                        <div className="text-sm text-green-400 font-medium">Actif</div>
+                      </div>
+                      <div className={`p-3 rounded-lg border ${T.inputBorder} ${T.inputBg}`}>
+                        <div className={`text-xs ${T.textFaint} mb-1`}>Chiffrement</div>
+                        <div className={`text-sm font-medium ${encryptionSalt ? 'text-green-400' : 'text-amber-400'}`}>
+                          {encryptionSalt ? 'Actif' : 'Disponible'}
+                        </div>
+                      </div>
+                    </div>
+
                     {/* Inactivity timer */}
                     <div>
                       <label className={`block text-sm ${T.textMuted} mb-2`}>Verrouillage automatique</label>
@@ -2482,7 +2408,7 @@ const App = () => {
                         onChange={async (e) => {
                           const mins = parseInt(e.target.value);
                           try {
-                            await invoke('set_profile_pin', { profileName: activeProfile, pinHash: '__KEEP__', inactivityMinutes: mins });
+                            await invoke('set_profile_pin', { profileName: activeProfile, rawPin: '__KEEP__', inactivityMinutes: mins });
                             setProfileSecurity(prev => ({ ...prev, inactivity_minutes: mins }));
                             showToast(mins > 0 ? `Verrouillage après ${mins} min` : 'Verrouillage auto désactivé');
                           } catch(_) {}
@@ -2499,191 +2425,109 @@ const App = () => {
                     </div>
 
                     {/* Lock now */}
-                    <button onClick={() => { setShowMenuDrawer(false); setIsLocked(true); setPinInput(''); }}
+                    <button onClick={() => { setShowMenuDrawer(false); setIsLocked(true); setTheme('dark'); clearSensitiveState(); setPinInput(''); }}
                       className="w-full px-4 py-2.5 bg-amber-500 text-zinc-900 rounded-lg text-sm font-medium hover:bg-amber-400 flex items-center justify-center gap-2">
-                      🔐 Verrouiller maintenant
+                      Verrouiller maintenant
                     </button>
 
                     {/* Change PIN */}
-                    <div className="border-t pt-4">
-                      <label className={`block text-sm ${T.textMuted} mb-2`}>Changer le PIN</label>
-                      <div className="flex gap-1">
-                        <input type="password" maxLength={20} placeholder="Nouveau PIN..."
-                          id="pin-change-input"
-                          className={`flex-1 px-3 py-2 ${T.inputBg} border ${T.inputBorder} rounded text-sm focus:outline-none focus:border-amber-500/50`}
-                          onKeyDown={e => { if (e.key === 'Enter') document.getElementById('pin-change-confirm')?.click(); }} />
-                        <button id="pin-change-confirm" onClick={async () => {
-                          const input = document.getElementById('pin-change-input');
-                          const val = input?.value?.trim();
-                          if (!val || val.length < 4) { showToast('PIN trop court (min 4)'); return; }
-                          const h = await hashPin(val);
-                          await invoke('set_profile_pin', { profileName: activeProfile, pinHash: h, inactivityMinutes: profileSecurity.inactivity_minutes || 5 });
-                          input.value = '';
-                          showToast('🔒 PIN modifié');
-                        }} className="px-3 py-2 bg-amber-500 text-zinc-900 rounded text-sm font-medium hover:bg-amber-400">Changer</button>
-                      </div>
-                    </div>
+                    <button onClick={handlePinChange}
+                      className={`w-full px-4 py-2.5 rounded-lg text-sm font-medium border ${T.inputBorder} ${T.inputBg} ${T.textMuted} hover:border-amber-500/30 transition-colors`}>
+                      Changer le PIN
+                    </button>
 
                     {/* Remove PIN */}
                     <button onClick={async () => {
-                      if (await showConfirm('Supprimer le PIN de ce profil ?')) {
-                        await invoke('remove_profile_pin', { profileName: activeProfile });
-                        setProfileSecurity({ has_pin: false, inactivity_minutes: 0 });
-                        showToast('PIN supprimé');
+                      if (await showConfirm('Supprimer le PIN de ce profil ? Le chiffrement sera désactivé.')) {
+                        try {
+                          const pin = await requestPinConfirmation('Confirmer la suppression du PIN');
+                          await invoke('remove_profile_pin', { profileName: activeProfile, currentPin: pin });
+                          setProfileSecurity({ has_pin: false, inactivity_minutes: 0 });
+                          setEncryptionSalt('');
+                          showToast('PIN et chiffrement supprimés');
+                        } catch (e) {
+                          if (String(e) !== 'Error: Opération annulée') showToast('Échec de la suppression');
+                        }
                       }
                     }} className="w-full px-4 py-2.5 bg-red-500/10 text-red-400 rounded-lg text-sm hover:bg-red-500/20 border border-red-500/20">
                       Supprimer le PIN
                     </button>
+
+                    {/* Advanced section (collapsible) */}
+                    <div className="border-t border-zinc-800 pt-4 mt-2">
+                      <button onClick={() => setShowAdvancedSecurity(!showAdvancedSecurity)}
+                        className={`flex items-center justify-between w-full text-sm ${T.textMuted} hover:text-amber-500 transition-colors`}>
+                        <span>Paramètres avancés</span>
+                        <span className="text-xs">{showAdvancedSecurity ? '▲' : '▼'}</span>
+                      </button>
+                      {showAdvancedSecurity && (
+                        <div className="mt-4 space-y-4">
+                          {/* Salt display (read-only) */}
+                          <div>
+                            <label className={`block text-xs ${T.textMuted} mb-1`}>Sel de chiffrement</label>
+                            <div className="flex gap-2">
+                              <input
+                                type="password"
+                                value={encryptionSalt}
+                                readOnly
+                                placeholder="Aucun sel généré"
+                                className={`flex-1 px-3 py-2 ${T.inputBg} border ${T.inputBorder} rounded text-sm font-mono focus:outline-none opacity-70`}
+                              />
+                              {!encryptionSalt && (
+                                <button onClick={generateNewSalt}
+                                  className="px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg hover:bg-zinc-700 transition-colors text-xs">
+                                  Générer
+                                </button>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Test encryption */}
+                          <button
+                            onClick={() => testEncryption()}
+                            className={`w-full px-4 py-2.5 rounded-lg text-sm font-medium transition-colors ${encryptionSalt
+                              ? 'bg-blue-600 hover:bg-blue-500 text-white'
+                              : 'bg-zinc-800 text-zinc-500 cursor-not-allowed'}`}
+                            disabled={!encryptionSalt}
+                          >
+                            Tester le chiffrement
+                          </button>
+
+                          {testEncryptionResult && (
+                            <div className={`p-3 rounded-lg text-xs ${testEncryptionResult.success
+                              ? 'border border-green-500/30 bg-green-500/5 text-green-400'
+                              : 'border border-red-500/30 bg-red-500/5 text-red-400'}`}>
+                              {testEncryptionResult.success ? (
+                                <div className="font-medium">Chiffrement fonctionnel</div>
+                              ) : (
+                                <div className="font-medium">Échec du test de chiffrement</div>
+                              )}
+                            </div>
+                          )}
+
+                          <div className="p-3 bg-zinc-900/50 rounded-lg border border-zinc-800 text-xs">
+                            <div className="font-medium mb-2">Comment ça marche</div>
+                            <div className={`space-y-1 ${T.textFaint}`}>
+                              <p>PIN + sel unique = clé de chiffrement</p>
+                              <p>Chaque wallet a son propre sel</p>
+                              <p>Algorithme : AES-256-GCM</p>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   </>
                 ) : (
                   <div className="space-y-3">
-                    <p className={`text-sm ${T.textMuted}`}>Configurez un code de sécurité pour protéger l'accès à ce profil et activer le chiffrement des données sensibles.</p>
+                    <p className={`text-sm ${T.textMuted}`}>Configurez un code PIN pour protéger l'accès à ce profil. Le chiffrement AES-256 sera activé automatiquement.</p>
                     <button
-                      onClick={openPinSetupOverlay}
+                      onClick={handlePinSetup}
                       className="w-full px-4 py-2.5 bg-amber-500 text-zinc-900 rounded-lg text-sm font-medium hover:bg-amber-400 transition-colors"
                     >
-                      🔒 Configurer un PIN
+                      Configurer un PIN
                     </button>
                   </div>
                 )}
-
-                {/* 🔐 ENCRYPTION SECTION 🔐 */}
-                <div className={`border-t border-zinc-800 pt-6 mt-4 ${!profileSecurity.has_pin ? 'opacity-50 pointer-events-none' : ''}`}>
-                  <div className="flex items-center justify-between mb-4">
-                    <div>
-                      <label className={`block text-sm ${T.textMuted} mb-1`}>🔐 Chiffrement des données</label>
-                      <div className={`text-xs ${T.textFaint}`}>Protégez vos adresses de wallet avec le chiffrement AES-256</div>
-                    </div>
-                    <button
-                      onClick={initEncryptionSystem}
-                      className="px-3 py-1 text-xs border border-zinc-700 rounded-lg hover:bg-zinc-800/50 transition-colors"
-                      title="Initialiser le système de chiffrement"
-                      disabled={!profileSecurity.has_pin}
-                    >
-                      ⚡ Initialiser
-                    </button>
-                  </div>
-
-                  <div className="space-y-4">
-                    <div>
-                      <label className={`block text-xs ${T.textMuted} mb-1`}>Sel de chiffrement</label>
-                      <div className="flex gap-2">
-                        <input
-                          type="text"
-                          value={encryptionSalt}
-                          onChange={(e) => setEncryptionSalt(e.target.value)}
-                          placeholder="Générer un sel..."
-                          className={`flex-1 px-3 py-2 ${T.inputBg} border ${T.inputBorder} rounded text-sm font-mono focus:outline-none`}
-                          disabled={!profileSecurity.has_pin}
-                        />
-                        <button
-                          onClick={generateNewSalt}
-                          className="px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg hover:bg-zinc-700 transition-colors"
-                          title="Générer un nouveau sel aléatoire"
-                          disabled={!profileSecurity.has_pin}
-                        >
-                          🎲
-                        </button>
-                      </div>
-                    </div>
-
-                    <button
-                      onClick={() => testEncryption()}
-                      className={`w-full px-4 py-2.5 rounded-lg text-sm font-medium transition-colors ${encryptionSalt && profileSecurity.has_pin
-                        ? 'bg-blue-600 hover:bg-blue-500 text-white'
-                        : 'bg-zinc-800 text-zinc-500 cursor-not-allowed'}`}
-                      disabled={!encryptionSalt || !profileSecurity.has_pin}
-                      title={!profileSecurity.has_pin ? 'Configurez d\'abord un PIN' : encryptionSalt ? 'Tester le chiffrement avec une adresse de test' : 'Générez d\'abord un sel'}
-                    >
-                      🔐 Tester le chiffrement
-                    </button>
-
-                    {testEncryptionResult && (
-                      <div className={`p-3 rounded-lg text-xs ${testEncryptionResult.success
-                        ? 'border border-green-500/30 bg-green-500/5 text-green-400'
-                        : 'border border-red-500/30 bg-red-500/5 text-red-400'}`}
-                      >
-                        {testEncryptionResult.success ? (
-                          <>
-                            <div className="font-medium flex items-center gap-1">
-                              ✅ Chiffrement réussi !
-                              {testEncryptionResult.walletName && (
-                                <span className="text-green-300">Wallet: {testEncryptionResult.walletName}</span>
-                              )}
-                            </div>
-                            <div className={`mt-2 space-y-1`}>
-                              <div className="flex justify-between">
-                                <span className={T.textFaint}>Original:</span>
-                                <span className="font-mono">{testEncryptionResult.original.substring(0, 25)}...</span>
-                              </div>
-                              <div className="flex justify-between">
-                                <span className={T.textFaint}>Chiffré:</span>
-                                <span className="font-mono">{testEncryptionResult.encrypted.substring(0, 25)}...</span>
-                              </div>
-                              <div className="flex justify-between">
-                                <span className={T.textFaint}>Dé-chiffré:</span>
-                                <span className="font-mono">{testEncryptionResult.decrypted.substring(0, 25)}...</span>
-                              </div>
-                            </div>
-                            <div className={`mt-2 p-2 bg-green-500/10 rounded text-green-300 text-xs`}>
-                              💡 Votre système de chiffrement est opérationnel. Tous vos wallets peuvent maintenant être sécurisés.
-                            </div>
-                          </>
-                        ) : (
-                          <div className="font-medium flex items-center gap-1">
-                            ❌ Échec du test
-                            <span className="text-red-300">({testEncryptionResult.error || 'Données corrompues'})</span>
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    <div className="p-3 bg-zinc-900/50 rounded-lg border border-zinc-800 text-xs">
-                      <div className="font-medium mb-2 flex items-center gap-2">
-                        <span>ℹ️</span> <span>Comment ça marche ?</span>
-                      </div>
-                      <div className={`space-y-2 ${T.textFaint}`}>
-                        <p><span className="text-blue-400">•</span> Votre <span className="font-medium text-amber-500">PIN</span> + un <span className="font-medium text-amber-500">sel unique</span> → crée une clé de chiffrement</p>
-                        <p><span className="text-blue-400">•</span> Chaque wallet a son propre sel pour une sécurité maximale</p>
-                        <p><span className="text-blue-400">•</span> Les adresses sont chiffrées avec <span className="font-medium text-amber-500">AES-256-GCM</span></p>
-                        <p><span className="text-blue-400">•</span> Seules les données chiffrées sont stockées</p>
-                      </div>
-                    </div>
-
-                    {profileSecurity.has_pin && encryptionSalt && (
-                      <div className="p-3 bg-green-500/10 border border-green-500/30 rounded-lg text-xs text-green-300">
-                        <div className="font-medium mb-1 flex items-center gap-2">
-                          <span>🔑</span> <span>PIN + Chiffrement activés</span>
-                        </div>
-                        <p>Votre profil est entièrement sécurisé. Les adresses sont chiffrées avec AES-256.</p>
-                        <button
-                          onClick={() => testEncryption()}
-                          className="mt-2 px-3 py-1.5 bg-green-600 text-white text-xs rounded hover:bg-green-500 transition-colors"
-                        >
-                          ✅ Vérifier le chiffrement
-                        </button>
-                      </div>
-                    )}
-                    
-                    {profileSecurity.has_pin && !encryptionSalt && (
-                      <div className="p-3 bg-blue-500/10 border border-blue-500/30 rounded-lg text-xs text-blue-300">
-                        <div className="font-medium mb-1 flex items-center gap-2">
-                          <span>🔑</span> <span>PIN actif - Chiffrement disponible</span>
-                        </div>
-                        <p>Votre code de sécurité protège ce profil. Initialisez et testez le chiffrement.</p>
-                      </div>
-                    )}
-
-                    {!profileSecurity.has_pin && (
-                      <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-lg text-xs text-amber-300">
-                        <div className="font-medium mb-1 flex items-center gap-2">
-                          <span>⚠️</span> <span>PIN requis pour le chiffrement</span>
-                        </div>
-                        <p>Configurez d'abord un PIN ci-dessus pour sécuriser vos données avec le chiffrement.</p>
-                      </div>
-                    )}
-                  </div>
-                </div>
               </div>
             </div>
           )}
@@ -2702,7 +2546,7 @@ const App = () => {
             </div>
             <button onClick={() => setShowWhitepaper(false)} className="text-zinc-500 hover:text-amber-500 text-xl transition-colors">✕</button>
           </div>
-          <iframe src="https://bitcoin.org/bitcoin.pdf" className="flex-1 w-full bg-zinc-900" title="Bitcoin Whitepaper" />
+          <iframe src="https://bitcoin.org/bitcoin.pdf" className="flex-1 w-full bg-zinc-900" title="Bitcoin Whitepaper" sandbox="allow-scripts allow-same-origin" />
         </div>
       )}
 
@@ -2747,7 +2591,7 @@ const App = () => {
           <div className="text-center mb-8">
             <div className="text-5xl mb-4">🔒</div>
             <h1 className="text-xl font-bold text-zinc-200 mb-1">JANUS Monitor</h1>
-            <p className="text-sm text-zinc-500">Profil verrouillé : <span className="text-amber-500">{activeProfile}</span></p>
+            <p className="text-sm text-zinc-500">Profil verrouillé</p>
           </div>
           <div className="w-72 space-y-3">
             <input
@@ -2760,12 +2604,27 @@ const App = () => {
               className="w-full px-4 py-3 bg-zinc-800 border border-zinc-700 rounded-lg text-center text-lg tracking-widest text-zinc-100 focus:outline-none focus:border-amber-500/50 placeholder:text-zinc-600 placeholder:tracking-normal placeholder:text-sm"
             />
             {pinError && <p className="text-red-400 text-xs text-center">{pinError}</p>}
+            {pinAttemptInfo && pinAttemptInfo.failed > 0 && (
+              <div className={`text-xs text-center px-3 py-2 rounded-lg ${pinAttemptInfo.failed >= 7 ? 'bg-red-500/15 text-red-400' : 'bg-amber-500/10 text-amber-400'}`}>
+                {pinAttemptInfo.retry_secs > 0
+                  ? `Réessayez dans ${pinAttemptInfo.retry_secs}s`
+                  : `Tentative ${pinAttemptInfo.failed}/${pinAttemptInfo.max}`}
+              </div>
+            )}
             <button onClick={handleUnlock}
-              className="w-full px-4 py-3 bg-amber-500 text-zinc-900 rounded-lg font-medium hover:bg-amber-400 transition-colors">
+              disabled={pinAttemptInfo?.retry_secs > 0}
+              className={`w-full px-4 py-3 rounded-lg font-medium transition-colors ${pinAttemptInfo?.retry_secs > 0 ? 'bg-zinc-700 text-zinc-500 cursor-not-allowed' : 'bg-amber-500 text-zinc-900 hover:bg-amber-400'}`}>
               Déverrouiller
             </button>
           </div>
           <p className="text-zinc-700 text-xs mt-8">Appuyez sur Entrée pour valider</p>
+        </div>
+      )}
+
+      {/* ── Inactivity Warning Banner ── */}
+      {showInactivityWarning && !isLocked && (
+        <div className="fixed top-0 left-0 right-0 z-[9998] bg-amber-500/90 text-zinc-900 text-center py-2 text-sm font-medium animate-pulse">
+          Verrouillage automatique imminent — bougez la souris pour annuler
         </div>
       )}
 
@@ -2787,8 +2646,8 @@ const App = () => {
               <div className="p-3 bg-zinc-800/50 rounded-lg border border-zinc-700">
                 <div className="text-xs text-zinc-400 mb-1">Wallet Monero</div>
                 <div className="font-medium text-zinc-100">{currentMoneroWallet.name}</div>
-                <div className={`text-xs font-mono ${T.textFaint} break-all mt-1`}>
-                  {currentMoneroWallet.address}
+                <div className={`text-xs font-mono ${T.textFaint} mt-1`}>
+                  {maskAddress(currentMoneroWallet.address)}
                 </div>
               </div>
               
@@ -2934,69 +2793,77 @@ const App = () => {
         </div>
       )}
       
-      {/* 🔒 PIN Setup Overlay - Professional PIN Configuration */}
-      {showPinSetupOverlay && (
-        <div className="fixed inset-0 z-[100] bg-black/75 flex items-center justify-center p-4" onClick={(e) => { if (e.target === e.currentTarget) closePinSetupOverlay(); }}>
+      {/* Unified PIN Modal (setup, change, confirm) */}
+      {pinModal && (
+        <div className="fixed inset-0 z-[100] bg-black/75 flex items-center justify-center p-4" data-pin-modal onClick={(e) => { if (e.target === e.currentTarget) closePinModal(); }}>
           <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 w-full max-w-md mx-auto shadow-2xl" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-semibold text-zinc-100">🔒 Configuration du Code de Sécurité</h3>
-              <button onClick={closePinSetupOverlay} className="text-zinc-500 hover:text-amber-500 text-xl transition-colors">✕</button>
+              <h3 className="text-lg font-semibold text-zinc-100">{pinModal.title}</h3>
+              <button onClick={closePinModal} className="text-zinc-500 hover:text-amber-500 text-xl transition-colors">✕</button>
             </div>
-            
-            <p className={`text-sm ${T.textMuted} mb-6`}>
-              Configurez un code PIN pour protéger l'accès à votre profil et activer le chiffrement des données sensibles.
-            </p>
-            
-            <div className="space-y-4">
-              <div>
-                <label className={`block text-xs font-medium ${T.textMuted} mb-1`}>Nouveau Code de Sécurité</label>
-                <input
-                  type="password"
-                  value={newPin}
-                  onChange={(e) => setNewPin(e.target.value)}
-                  maxLength={20}
-                  placeholder="Minimum 4 caractères..."
-                  className={`w-full px-3 py-2.5 ${T.inputBg} border ${T.inputBorder} rounded-lg text-sm focus:outline-none focus:border-amber-500/50`}
-                  onKeyDown={(e) => { if (e.key === 'Enter') handlePinSetup(); }}
-                />
+
+            {pinModal.mode === 'confirm' ? (
+              <div className="space-y-4">
+                <p className={`text-sm ${T.textMuted}`}>Entrez votre PIN pour confirmer l'opération.</p>
+                <input type="password" value={pinModalPin} onChange={e => setPinModalPin(e.target.value)}
+                  maxLength={20} placeholder="Votre PIN..." autoFocus
+                  onKeyDown={e => { if (e.key === 'Enter') handlePinModalSubmit(); }}
+                  className={`w-full px-3 py-2.5 ${T.inputBg} border ${T.inputBorder} rounded-lg text-sm focus:outline-none focus:border-amber-500/50`} />
               </div>
-              
-              <div>
-                <label className={`block text-xs font-medium ${T.textMuted} mb-1`}>Confirmer le Code de Sécurité</label>
-                <input
-                  type="password"
-                  value={confirmPin}
-                  onChange={(e) => setConfirmPin(e.target.value)}
-                  maxLength={20}
-                  placeholder="Répétez le code..."
-                  className={`w-full px-3 py-2.5 ${T.inputBg} border ${T.inputBorder} rounded-lg text-sm focus:outline-none focus:border-amber-500/50`}
-                  onKeyDown={(e) => { if (e.key === 'Enter') handlePinSetup(); }}
-                />
-              </div>
-              
-              {pinSetupError && (
-                <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-xs text-red-400">
-                  <span className="font-medium">⚠️ </span>{pinSetupError}
+            ) : (
+              <div className="space-y-4">
+                <p className={`text-sm ${T.textMuted}`}>
+                  {pinModal.mode === 'setup'
+                    ? 'Le PIN protège votre profil et active le chiffrement AES-256 automatiquement.'
+                    : 'Entrez votre nouveau code de sécurité.'}
+                </p>
+                <div>
+                  <label className={`block text-xs font-medium ${T.textMuted} mb-1`}>
+                    {pinModal.mode === 'setup' ? 'Nouveau PIN' : 'Nouveau PIN'}
+                  </label>
+                  <input type="password" value={pinModalPin} onChange={e => setPinModalPin(e.target.value)}
+                    maxLength={20} placeholder="Minimum 4 caractères..." autoFocus
+                    onKeyDown={e => { if (e.key === 'Enter' && pinModalConfirm) handlePinModalSubmit(); }}
+                    className={`w-full px-3 py-2.5 ${T.inputBg} border ${T.inputBorder} rounded-lg text-sm focus:outline-none focus:border-amber-500/50`} />
+                  {/* Strength indicator */}
+                  {pinModalPin.length > 0 && (() => {
+                    const strength = getPinStrength(pinModalPin);
+                    return (
+                      <div className="mt-2">
+                        <div className="flex gap-1 mb-1">
+                          {[1,2,3,4].map(i => (
+                            <div key={i} className={`h-1 flex-1 rounded-full ${i <= strength.level ? strength.color : 'bg-zinc-700'}`} />
+                          ))}
+                        </div>
+                        <div className={`text-xs ${strength.level <= 1 ? 'text-red-400' : strength.level <= 2 ? 'text-amber-400' : 'text-green-400'}`}>
+                          {strength.label}
+                          {pinModalPin.length < 6 && strength.level > 0 && ' — 6+ caractères recommandés'}
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
-              )}
-              
-              <button
-                onClick={handlePinSetup}
-                className="w-full px-4 py-2.5 bg-amber-500 text-zinc-900 rounded-lg text-sm font-medium hover:bg-amber-400 transition-colors"
-              >
-                🔒 Configurer le Code de Sécurité
-              </button>
-              
-              <div className={`p-3 bg-zinc-900/50 rounded-lg border border-zinc-800 text-xs ${T.textFaint}`}>
-                <div className="font-medium mb-2">ℹ️ Conseils de sécurité :</div>
-                <ul className="space-y-1 pl-4">
-                  <li>• Utilisez au moins 6 caractères</li>
-                  <li>• Évitez les codes évidents (1234, 0000)</li>
-                  <li>• Mémorisez votre code - il ne peut pas être récupéré</li>
-                  <li>• Ce code protège l'accès et le chiffrement</li>
-                </ul>
+                <div>
+                  <label className={`block text-xs font-medium ${T.textMuted} mb-1`}>Confirmer</label>
+                  <input type="password" value={pinModalConfirm} onChange={e => setPinModalConfirm(e.target.value)}
+                    maxLength={20} placeholder="Répétez le code..."
+                    onKeyDown={e => { if (e.key === 'Enter') handlePinModalSubmit(); }}
+                    className={`w-full px-3 py-2.5 ${T.inputBg} border ${T.inputBorder} rounded-lg text-sm focus:outline-none focus:border-amber-500/50`} />
+                  {pinModalConfirm.length > 0 && pinModalPin !== pinModalConfirm && (
+                    <div className="text-xs text-red-400 mt-1">Les codes ne correspondent pas</div>
+                  )}
+                </div>
               </div>
-            </div>
+            )}
+
+            {pinModalError && (
+              <div className="mt-3 p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-xs text-red-400">{pinModalError}</div>
+            )}
+
+            <button onClick={handlePinModalSubmit}
+              className="w-full mt-4 px-4 py-2.5 bg-amber-500 text-zinc-900 rounded-lg text-sm font-medium hover:bg-amber-400 transition-colors">
+              {pinModal.mode === 'setup' ? 'Activer PIN + Chiffrement' : pinModal.mode === 'change' ? 'Changer le PIN' : 'Confirmer'}
+            </button>
           </div>
         </div>
       )}

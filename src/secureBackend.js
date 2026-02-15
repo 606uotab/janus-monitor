@@ -37,7 +37,6 @@ const secureInvoke = async (command, args = {}, expectedType = null, expectedFie
     // Validation de la réponse
     return validateBackendResponse(response, expectedType, expectedFields);
   } catch (error) {
-    console.error(`Erreur lors de l'appel sécurisé à ${command}:`, error);
     throw error;
   }
 };

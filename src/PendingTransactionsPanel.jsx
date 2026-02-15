@@ -60,9 +60,15 @@ export default function PendingTransactionsPanel({ show, onClose, onBackToMenu, 
 
   const isDark = theme === 'dark' || theme === 'noctali' || theme === 'lunarpunk';
   const isLP = theme === 'lunarpunk';
-  const accentColor = isLP ? '#6d8ff8' : theme === 'noctali' ? '#F4D995' : '#f59e0b';
-  const accentHover = isLP ? '#8aa4fa' : theme === 'noctali' ? '#f6e0a8' : '#f59e0b';
-  const T = isDark ? {
+  const isSP = theme === 'solarpunk';
+  const accentColor = isSP ? '#2a7a1a' : isLP ? '#6d8ff8' : theme === 'noctali' ? '#F4D995' : '#f59e0b';
+  const accentHover = isSP ? '#3a8a28' : isLP ? '#8aa4fa' : theme === 'noctali' ? '#f6e0a8' : '#f59e0b';
+  const T = isSP ? {
+    bg: 'bg-[#eaf3e0]/90', cardBg: 'bg-[#e8f1de]/80', cardBg2: 'bg-[#ddebd0]/75',
+    border: 'border-[#a8c898]/60', text: 'text-[#1a3520]',
+    textMuted: 'text-[#4a6a3e]', textFaint: 'text-[#7a9a6a]',
+    inputBg: 'bg-[#f0f7e8]/85', inputBorder: 'border-[#a8c898]/60',
+  } : isDark ? {
     bg: isLP ? 'bg-[#08071a]' : 'bg-zinc-900', cardBg: isLP ? 'bg-[#0d0c24]' : 'bg-zinc-800', cardBg2: isLP ? 'bg-[#12103a]' : 'bg-zinc-700',
     border: isLP ? 'border-[#1a1840]' : 'border-zinc-700', text: 'text-zinc-100',
     textMuted: 'text-zinc-400', textFaint: 'text-zinc-500',
@@ -96,7 +102,7 @@ export default function PendingTransactionsPanel({ show, onClose, onBackToMenu, 
     try {
       const txs = await invoke('get_pending_transactions');
       setPendingTxs(txs.filter(tx => walletIds.has(tx.wallet_id)));
-    } catch (e) { console.error('Pending TX:', e); }
+    } catch (e) { /* silent */ }
     finally { setLoading(false); }
   };
 
@@ -117,10 +123,9 @@ export default function PendingTransactionsPanel({ show, onClose, onBackToMenu, 
           w.name || w.asset.toUpperCase(),
           ethKey || null,
           10
-        ).catch(e => { 
-          console.warn(`History ${w.name || w.asset}:`, e); 
+        ).catch(() => {
           showToast(`⚠️ Erreur historique pour ${w.asset.toUpperCase()}`, 2000);
-          return []; 
+          return [];
         })
       );
 
@@ -129,7 +134,6 @@ export default function PendingTransactionsPanel({ show, onClose, onBackToMenu, 
       // Validation des résultats
       const validatedResults = results.map(result => {
         if (!Array.isArray(result)) {
-          console.warn('Résultat historique invalide:', result);
           return [];
         }
         return result.filter(tx => 
@@ -141,7 +145,6 @@ export default function PendingTransactionsPanel({ show, onClose, onBackToMenu, 
       all.sort((a, b) => b.timestamp - a.timestamp);
       setHistoryTxs(all);
     } catch (e) {
-      console.error('Erreur historique:', e);
       showToast('❌ Erreur de chargement de l\'historique', 3000);
     } finally {
       setHistoryLoading(false);
@@ -150,7 +153,7 @@ export default function PendingTransactionsPanel({ show, onClose, onBackToMenu, 
 
   const handleClear = async (txHash) => {
     try { await invoke('clear_pending_transaction', { txHash }); await loadPendingTransactions(); }
-    catch (e) { console.error(e); }
+    catch (e) { /* silent */ }
   };
 
   const getFilteredCsvTxs = () => {
@@ -188,6 +191,7 @@ export default function PendingTransactionsPanel({ show, onClose, onBackToMenu, 
       // Fallback: clipboard
       try {
         await navigator.clipboard.writeText(csv);
+        setTimeout(() => { navigator.clipboard.writeText('').catch(() => {}); }, 10000);
         setCsvMsg('✓ Copié dans le presse-papier');
         setTimeout(() => setCsvMsg(''), 3000);
       } catch(_) { setCsvMsg('Erreur export'); setTimeout(() => setCsvMsg(''), 2000); }
@@ -429,6 +433,7 @@ function PendingTxCard({ tx, T, onClear, fmt, fmtTime, walletName, walletAddress
   const doCopy = (text, label) => {
     navigator.clipboard.writeText(text).then(() => {
       setCopied(label); setTimeout(() => setCopied(''), 1500);
+      setTimeout(() => { navigator.clipboard.writeText('').catch(() => {}); }, 10000);
     }).catch(() => {});
   };
 
@@ -503,6 +508,7 @@ function HistoryTxCard({ tx, T, fmt, fmtTime, accentColor }) {
   const doCopy = (text, label) => {
     navigator.clipboard.writeText(text).then(() => {
       setCopied(label); setTimeout(() => setCopied(''), 1500);
+      setTimeout(() => { navigator.clipboard.writeText('').catch(() => {}); }, 10000);
     }).catch(() => {});
   };
 

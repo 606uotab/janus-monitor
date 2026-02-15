@@ -114,7 +114,7 @@ pub fn record_failed_attempt(profile_name: &str) -> Result<u32, String> {
     entry.last_attempt = Instant::now();
     if entry.failed_attempts >= MAX_FAILED_ATTEMPTS {
         entry.locked_until = Some(Instant::now() + Duration::from_secs(LOCKOUT_DURATION_SECS));
-        println!("[SECURITY] Profile '{}' locked for {}s after {} failed attempts",
+        eprintln!("[SECURITY] Profile '{}' locked for {}s after {} failed attempts",
             profile_name, LOCKOUT_DURATION_SECS, entry.failed_attempts);
     }
     Ok(MAX_FAILED_ATTEMPTS.saturating_sub(entry.failed_attempts))
@@ -135,6 +135,12 @@ fn calculate_delay(failed_attempts: u32) -> u64 {
     delay.min(MAX_DELAY_MS)
 }
 
+/// Get the current failed attempt count for a profile.
+pub fn get_failed_attempts(profile_name: &str) -> u32 {
+    let state = RATE_LIMIT_STATE.lock().unwrap_or_else(|e| e.into_inner());
+    state.get(profile_name).map(|e| e.failed_attempts).unwrap_or(0)
+}
+
 /// Detect legacy SHA-256 hex hash (64 hex chars, no $argon2 prefix)
 pub fn is_legacy_sha256_hash(stored_hash: &str) -> bool {
     stored_hash.len() == 64
@@ -144,7 +150,7 @@ pub fn is_legacy_sha256_hash(stored_hash: &str) -> bool {
 
 /// Re-hash PIN from legacy SHA-256 to Argon2id
 pub fn migrate_pin_hash(raw_pin: &str) -> Result<String, String> {
-    println!("[SECURITY] Migrating PIN hash from SHA-256 to Argon2id");
+    eprintln!("[SECURITY] Migrating PIN hash from SHA-256 to Argon2id");
     hash_pin(raw_pin)
 }
 

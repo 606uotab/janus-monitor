@@ -7,6 +7,9 @@ use hex;
 use lazy_static::lazy_static;
 use reqwest;
 
+// Session encryption key state — derived from PIN on unlock, cleared on lock
+pub struct SessionKeyState(pub Mutex<Option<Vec<u8>>>);
+
 mod pin_security;
 mod input_validation;
 
@@ -34,13 +37,13 @@ fn secure_log(message: &str, sensitive_data: &str) {
     result.extend_from_slice(&encrypted);
 
     let encrypted_hex = hex::encode(&result);
-    println!("[SECURE_LOG] {} [ENCRYPTED: {}]", message, encrypted_hex);
+    eprintln!("[SECURE_LOG] {} [ENCRYPTED: {}]", message, encrypted_hex);
 }
 
 /// Log sensitive address information
 fn log_address(tag: &str, address: &str) {
     if address.is_empty() {
-        println!("[{}][EMPTY_ADDRESS]", tag);
+        eprintln!("[{}][EMPTY_ADDRESS]", tag);
         return;
     }
     
@@ -52,7 +55,7 @@ fn log_address(tag: &str, address: &str) {
     };
     
     secure_log(&format!("[{}] Address", tag), address);
-    println!("[{}] Display address: {}", tag, display_addr);
+    eprintln!("[{}] Display address: {}", tag, display_addr);
 }
 
 /// Log sensitive balance information
@@ -69,7 +72,7 @@ fn log_balance(tag: &str, balance: f64) {
     };
     
     secure_log(&format!("[{}] Balance", tag), &balance_str);
-    println!("[{}] Display balance: {}", tag, display_balance);
+    eprintln!("[{}] Display balance: {}", tag, display_balance);
 }
 
 /// Log API responses in a secure way (truncated and without sensitive data)
@@ -86,15 +89,44 @@ fn log_api_response(tag: &str, response: &str, max_length: usize) {
         .replace(|c: char| c.is_ascii_hexdigit(), "*")
         .replace(|c: char| c.is_numeric(), "*");
     
-    println!("[{}] API response (masked): {}", tag, masked);
+    eprintln!("[{}] API response (masked): {}", tag, masked);
     
     // Also log the full response encrypted
     secure_log(&format!("[{}] Full API response", tag), response);
 }
 
-// 
+//
+// INTERNAL ENCRYPTION HELPERS
+//
+
+fn encrypt_string_with_key(data: &str, key_bytes: &[u8]) -> Result<String, String> {
+    if data.is_empty() { return Ok(String::new()); }
+    let key = secretbox::Key::from_slice(&key_bytes[..secretbox::KEYBYTES])
+        .ok_or("Invalid key")?;
+    let nonce = secretbox::gen_nonce();
+    let encrypted = secretbox::seal(data.as_bytes(), &nonce, &key);
+    Ok(format!("{}:{}", hex::encode(nonce.as_ref()), hex::encode(&encrypted)))
+}
+
+fn decrypt_string_with_key(encrypted: &str, key_bytes: &[u8]) -> Result<String, String> {
+    if encrypted.is_empty() { return Ok(String::new()); }
+    let key = secretbox::Key::from_slice(&key_bytes[..secretbox::KEYBYTES])
+        .ok_or("Invalid key")?;
+    let parts: Vec<&str> = encrypted.splitn(2, ':').collect();
+    if parts.len() != 2 {
+        return Err("Invalid encrypted format".to_string());
+    }
+    let nonce_bytes = hex::decode(parts[0]).map_err(|e| format!("Nonce error: {}", e))?;
+    let nonce = secretbox::Nonce::from_slice(&nonce_bytes).ok_or("Invalid nonce")?;
+    let ciphertext = hex::decode(parts[1]).map_err(|e| format!("Cipher error: {}", e))?;
+    let decrypted = secretbox::open(&ciphertext, &nonce, &key)
+        .map_err(|_| "Decryption failed")?;
+    String::from_utf8(decrypted).map_err(|e| format!("UTF-8 error: {}", e))
+}
+
+//
 // STRUCTURES DE DONNÉES V2
-// 
+//
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Category {
@@ -129,6 +161,8 @@ struct ProfileData {
     wallets: Vec<Wallet>,
     #[serde(default)]
     theme: Option<String>,
+    #[serde(default)]
+    encrypted: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -697,14 +731,14 @@ fn set_profile_pin(state: State<DbState>, profile_name: String, raw_pin: String,
             "INSERT OR REPLACE INTO profile_security (profile_name, pin_hash, inactivity_minutes) VALUES (?1, ?2, ?3)",
             params![profile_name, argon2_hash, mins],
         ).map_err(|e| e.to_string())?;
-        println!("[SECURITY] PIN set for profile '{}' using Argon2id", profile_name);
+        eprintln!("[SECURITY] PIN set for profile '{}' using Argon2id", profile_name);
     }
     Ok(())
 }
 
-// ✅ PATCHED: Argon2id + rate limiting + legacy migration (was SHA-256 == compare)
+// ✅ PATCHED: Argon2id + rate limiting + legacy migration + session key derivation
 #[tauri::command]
-fn verify_profile_pin(state: State<DbState>, profile_name: String, raw_pin: String) -> Result<bool, String> {
+fn verify_profile_pin(state: State<DbState>, session_key: State<SessionKeyState>, profile_name: String, raw_pin: String) -> Result<bool, String> {
     input_validation::validate_profile_name(&profile_name)?;
     if raw_pin.is_empty() { return Err("PIN cannot be empty".to_string()); }
 
@@ -730,13 +764,15 @@ fn verify_profile_pin(state: State<DbState>, profile_name: String, raw_pin: Stri
                 "UPDATE profile_security SET pin_hash = ?1 WHERE profile_name = ?2",
                 params![new_hash, profile_name],
             ).map_err(|e| e.to_string())?;
-            println!("[SECURITY] Migrated '{}' from SHA-256 to Argon2id", profile_name);
+            eprintln!("[SECURITY] Migrated '{}' from SHA-256 to Argon2id", profile_name);
             pin_security::record_successful_attempt(&profile_name)?;
+            // Derive and store session encryption key
+            derive_and_store_session_key(&session_key, &raw_pin, &conn, &profile_name)?;
             return Ok(true);
         } else {
             let remaining = pin_security::record_failed_attempt(&profile_name)?;
             if remaining > 0 {
-                println!("[SECURITY] Failed PIN for '{}' ({} remaining)", profile_name, remaining);
+                eprintln!("[SECURITY] Failed PIN for '{}' ({} remaining)", profile_name, remaining);
             }
             return Ok(false);
         }
@@ -746,13 +782,50 @@ fn verify_profile_pin(state: State<DbState>, profile_name: String, raw_pin: Stri
     let is_valid = pin_security::verify_pin(&raw_pin, &stored_hash)?;
     if is_valid {
         pin_security::record_successful_attempt(&profile_name)?;
+        // Derive and store session encryption key
+        derive_and_store_session_key(&session_key, &raw_pin, &conn, &profile_name)?;
     } else {
         let remaining = pin_security::record_failed_attempt(&profile_name)?;
         if remaining > 0 {
-            println!("[SECURITY] Failed PIN for '{}' ({} remaining)", profile_name, remaining);
+            eprintln!("[SECURITY] Failed PIN for '{}' ({} remaining)", profile_name, remaining);
         }
     }
     Ok(is_valid)
+}
+
+/// Derive session encryption key from PIN + salt and store in memory
+fn derive_and_store_session_key(
+    session_key: &State<SessionKeyState>,
+    raw_pin: &str,
+    conn: &Connection,
+    profile_name: &str,
+) -> Result<(), String> {
+    // Get encryption salt from settings
+    let salt = conn.query_row(
+        "SELECT value FROM settings WHERE key = 'encryption_salt'",
+        [],
+        |row| row.get::<_, String>(0),
+    ).unwrap_or_default();
+
+    if salt.is_empty() {
+        return Ok(()); // No encryption configured
+    }
+
+    let salt_bytes = hex::decode(&salt).map_err(|e| format!("Invalid salt: {}", e))?;
+    let mut key_material = Vec::new();
+    key_material.extend_from_slice(raw_pin.as_bytes());
+    key_material.extend_from_slice(&salt_bytes);
+    let mut hash = sodiumoxide::crypto::hash::sha256::hash(&key_material);
+    for _ in 0..10000 {
+        let mut input = Vec::from(hash.as_ref());
+        input.extend_from_slice(&salt_bytes);
+        hash = sodiumoxide::crypto::hash::sha256::hash(&input);
+    }
+
+    let mut key_state = session_key.0.lock().map_err(|e| e.to_string())?;
+    *key_state = Some(Vec::from(hash.as_ref()));
+    eprintln!("[SECURITY] Session encryption key derived for '{}'", profile_name);
+    Ok(())
 }
 
 // SHA-256 helper for legacy migration only
@@ -766,27 +839,47 @@ fn sha256_hex(input: &str) -> String {
 pub struct PinStatus {
     pub is_locked: bool,
     pub max_attempts: u32,
+    pub failed_attempts: u32,
     pub retry_after_secs: u64,
 }
 
 #[tauri::command]
 fn get_pin_status(profile_name: String) -> Result<PinStatus, String> {
     input_validation::validate_profile_name(&profile_name)?;
+    let failed = pin_security::get_failed_attempts(&profile_name);
     match pin_security::check_rate_limit(&profile_name) {
-        Ok(()) => Ok(PinStatus { is_locked: false, max_attempts: 10, retry_after_secs: 0 }),
+        Ok(()) => Ok(PinStatus { is_locked: false, max_attempts: 10, failed_attempts: failed, retry_after_secs: 0 }),
         Err(msg) => {
             let secs = msg.split_whitespace().filter_map(|w: &str| w.parse::<u64>().ok()).next().unwrap_or(0);
-            Ok(PinStatus { is_locked: secs > 60, max_attempts: 10, retry_after_secs: secs })
+            Ok(PinStatus { is_locked: secs > 60, max_attempts: 10, failed_attempts: failed, retry_after_secs: secs })
         }
     }
 }
 
 #[tauri::command]
-fn remove_profile_pin(state: State<DbState>, profile_name: String) -> Result<(), String> {
+fn remove_profile_pin(state: State<DbState>, session_key: State<SessionKeyState>, profile_name: String, current_pin: String) -> Result<(), String> {
     input_validation::validate_profile_name(&profile_name)?;
+    // Verify current PIN before allowing removal
     let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let stored_hash: String = conn.query_row(
+        "SELECT pin_hash FROM profile_security WHERE profile_name = ?1",
+        params![profile_name],
+        |row| row.get(0),
+    ).map_err(|_| "No PIN set for this profile".to_string())?;
+    let valid = pin_security::verify_pin(&current_pin, &stored_hash)?;
+    if !valid {
+        return Err("Incorrect PIN".to_string());
+    }
     conn.execute("DELETE FROM profile_security WHERE profile_name = ?1", params![profile_name])
         .map_err(|e| e.to_string())?;
+    // Also clear session key
+    if let Ok(mut key_state) = session_key.0.lock() {
+        if let Some(ref mut key) = *key_state {
+            for byte in key.iter_mut() { *byte = 0; }
+        }
+        *key_state = None;
+    }
+    eprintln!("[SECURITY] PIN removed for profile '{}'", profile_name);
     Ok(())
 }
 
@@ -1220,7 +1313,21 @@ fn get_db_path() -> String {
         .unwrap_or_else(|| std::path::PathBuf::from("."))
         .join("janus-monitor");
     std::fs::create_dir_all(&data_dir).ok();
-    data_dir.join("janus.db").to_string_lossy().to_string()
+    // Set directory permissions to 0700 (owner only)
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&data_dir, std::fs::Permissions::from_mode(0o700));
+    }
+    let db_path = data_dir.join("janus.db");
+    let path_str = db_path.to_string_lossy().to_string();
+    // Set DB file permissions to 0600 (owner read/write only) if it exists
+    #[cfg(unix)]
+    if db_path.exists() {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&db_path, std::fs::Permissions::from_mode(0o600));
+    }
+    path_str
 }
 
 fn init_db(conn: &Connection) -> Result<(), rusqlite::Error> {
@@ -1287,7 +1394,7 @@ fn init_db(conn: &Connection) -> Result<(), rusqlite::Error> {
     .unwrap_or(false);
 
     if has_old_category {
-        println!("[MIGRATION V1→V2] Détection ancienne structure, migration en cours...");
+        eprintln!("[MIGRATION V1→V2] Détection ancienne structure, migration en cours...");
 
         let cat_count: i64 = conn.query_row("SELECT COUNT(*) FROM categories", [], |row| row.get(0)).unwrap_or(0);
         if cat_count == 0 {
@@ -1342,7 +1449,7 @@ fn init_db(conn: &Connection) -> Result<(), rusqlite::Error> {
         conn.execute("DROP TABLE wallets", [])?;
         conn.execute("ALTER TABLE wallets_new RENAME TO wallets", [])?;
 
-        println!("[MIGRATION V1→V2] Migration terminée !");
+        eprintln!("[MIGRATION V1→V2] Migration terminée !");
     }
 
     let wallet_count: i64 = conn.query_row("SELECT COUNT(*) FROM wallets", [], |row| row.get(0))?;
@@ -2029,90 +2136,68 @@ async fn fetch_balance(state: State<'_, DbState>, asset: String, address: String
     match asset.as_str() {
         // ── BTC via Blockstream + fallbacks Blockcypher + Blockchair ──
         "btc" => {
-            println!("[BTC] Fetching balance for: '{}'", address);
-
             // 1) Blockstream
             let url1 = format!("https://blockstream.info/api/address/{}/utxo", address);
-            println!("[BTC] Try Blockstream: {}", url1);
             match client.get(&url1).send().await {
                 Ok(resp) => {
                     let status = resp.status();
-                    println!("[BTC] Blockstream status: {}", status);
                     if status.is_success() {
                         match resp.json::<Vec<BlockstreamUtxo>>().await {
                             Ok(utxos) => {
                                 let total_sats: u64 = utxos.iter().map(|u| u.value).sum();
-                                println!("[BTC] Blockstream OK: {} sats ({} utxos)", total_sats, utxos.len());
                                 return Ok(total_sats as f64 / 100_000_000.0);
                             }
-                            Err(e) => println!("[BTC] Blockstream parse error: {}", e),
+                            Err(_e) => {}
                         }
-                    } else {
-                        let body = resp.text().await.unwrap_or_default();
-                        println!("[BTC] Blockstream error body: {}", body);
                     }
                 }
-                Err(e) => println!("[BTC] Blockstream network error: {}", e),
+                Err(_e) => {}
             }
 
             // 2) Blockcypher (excellent legacy P2PKH support)
             let url2 = format!("https://api.blockcypher.com/v1/btc/main/addrs/{}/balance", address);
-            println!("[BTC] Try Blockcypher: {}", url2);
             match client.get(&url2).send().await {
                 Ok(resp) => {
                     let status = resp.status();
-                    println!("[BTC] Blockcypher status: {}", status);
                     if status.is_success() {
                         match resp.json::<BlockcypherAddress>().await {
                             Ok(data) => {
                                 if let Some(bal) = data.final_balance.or(data.balance) {
-                                    println!("[BTC] Blockcypher OK: {} sats", bal);
                                     return Ok(bal as f64 / 100_000_000.0);
                                 }
                             }
-                            Err(e) => println!("[BTC] Blockcypher parse error: {}", e),
+                            Err(_e) => {}
                         }
-                    } else {
-                        let body = resp.text().await.unwrap_or_default();
-                        println!("[BTC] Blockcypher error body: {}", body);
                     }
                 }
-                Err(e) => println!("[BTC] Blockcypher network error: {}", e),
+                Err(_e) => {}
             }
 
             // 3) Blockchair
             let url3 = format!("https://api.blockchair.com/bitcoin/dashboards/address/{}", address);
-            println!("[BTC] Try Blockchair: {}", url3);
             match client.get(&url3).send().await {
                 Ok(resp) => {
                     let status = resp.status();
-                    println!("[BTC] Blockchair status: {}", status);
                     if status.is_success() {
                         if let Ok(raw) = resp.json::<serde_json::Value>().await {
                             if let Some(data) = raw.get("data").and_then(|d| d.as_object()) {
                                 for (_key, addr_data) in data {
                                     if let Some(addr_info) = addr_data.get("address") {
                                         if let Some(b) = addr_info.get("balance").and_then(|v| v.as_i64()) {
-                                            println!("[BTC] Blockchair OK: {} sats", b);
                                             return Ok(b as f64 / 100_000_000.0);
                                         }
                                         if let Some(b) = addr_info.get("balance").and_then(|v| v.as_f64()) {
-                                            println!("[BTC] Blockchair OK: {} sats (f64)", b);
                                             return Ok(b / 100_000_000.0);
                                         }
                                     }
                                 }
                             }
                         }
-                    } else {
-                        let body = resp.text().await.unwrap_or_default();
-                        println!("[BTC] Blockchair error body: {}", body);
                     }
                 }
-                Err(e) => println!("[BTC] Blockchair network error: {}", e),
+                Err(_e) => {}
             }
 
-            println!("[BTC] ALL 3 APIs FAILED for: {}", address);
             Err("Balance BTC introuvable (3 APIs testées) — vérifiez l'adresse".to_string())
         }
 
@@ -2206,7 +2291,6 @@ async fn fetch_balance(state: State<'_, DbState>, asset: String, address: String
 
         // ── ETH via Etherscan v2 ──
         "eth" => {
-            println!("[ETH] Fetching balance for: '{}'", address);
             // 1) Try Etherscan API
             let api_key = {
                 let conn = state.0.lock().map_err(|e| e.to_string())?;
@@ -2219,11 +2303,9 @@ async fn fetch_balance(state: State<'_, DbState>, asset: String, address: String
                     "https://api.etherscan.io/api?module=account&action=balance&address={}&tag=latest&apikey={}",
                     address, api_key
                 );
-                println!("[ETH] Trying Etherscan v1...");
                 match client.get(&url).send().await {
                     Ok(response) if response.status().is_success() => {
                         if let Ok(data) = response.json::<serde_json::Value>().await {
-                            println!("[ETH] Etherscan response: {}", serde_json::to_string(&data).unwrap_or_default().chars().take(300).collect::<String>());
                             let status = data.get("status").and_then(|s| s.as_str()).unwrap_or("0");
                             if status == "1" {
                                 let wei = match data.get("result") {
@@ -2232,17 +2314,13 @@ async fn fetch_balance(state: State<'_, DbState>, asset: String, address: String
                                     _ => 0.0,
                                 };
                                 let eth_bal = wei / 1_000_000_000_000_000_000.0;
-                                println!("[ETH] Etherscan OK: {} ETH", eth_bal);
                                 return Ok(eth_bal);
                             }
-                            println!("[ETH] Etherscan status != 1: {:?}", data.get("result"));
                         }
                     }
-                    Ok(resp) => println!("[ETH] Etherscan HTTP error: {}", resp.status()),
-                    Err(e) => println!("[ETH] Etherscan network error: {}", e),
+                    Ok(_resp) => {}
+                    Err(_e) => {}
                 }
-            } else {
-                println!("[ETH] No Etherscan API key, skipping to RPC");
             }
 
             // 2) Fallback: direct RPC eth_getBalance
@@ -2252,7 +2330,6 @@ async fn fetch_balance(state: State<'_, DbState>, asset: String, address: String
                 "https://rpc.ankr.com/eth",
             ];
             for rpc_url in &rpc_urls {
-                println!("[ETH] Trying RPC: {}", rpc_url);
                 let body = serde_json::json!({
                     "jsonrpc": "2.0", "method": "eth_getBalance",
                     "params": [&address, "latest"], "id": 1
@@ -2265,18 +2342,14 @@ async fn fetch_balance(state: State<'_, DbState>, asset: String, address: String
                                 if !hex_clean.is_empty() {
                                     if let Ok(wei) = u128::from_str_radix(hex_clean, 16) {
                                         let eth_bal = wei as f64 / 1_000_000_000_000_000_000.0;
-                                        println!("[ETH] RPC OK: {} ETH", eth_bal);
                                         return Ok(eth_bal);
                                     }
                                 }
                             }
-                            if let Some(err) = data.get("error") {
-                                println!("[ETH] RPC error: {:?}", err);
-                            }
                         }
                     }
-                    Ok(resp) => println!("[ETH] RPC HTTP error: {}", resp.status()),
-                    Err(e) => println!("[ETH] RPC network error: {}", e),
+                    Ok(_resp) => {}
+                    Err(_e) => {}
                 }
             }
             Err("Balance ETH non trouvée — vérifiez l'adresse et la clé Etherscan".to_string())
@@ -2284,8 +2357,6 @@ async fn fetch_balance(state: State<'_, DbState>, asset: String, address: String
 
         // ── ETC via RPC (primary) + Blockchair (fallback) ──
         "etc" => {
-            println!("[ETC] Fetching balance for: '{}'", address);
-
             // 1) ETC RPC direct (eth_getBalance) — multiple reliable endpoints
             let rpc_urls = [
                 "https://etc.rivet.link",
@@ -2299,49 +2370,39 @@ async fn fetch_balance(state: State<'_, DbState>, asset: String, address: String
                     "params": [&address, "latest"],
                     "id": 1
                 });
-                println!("[ETC] Try RPC: {}", rpc_url);
                 match client.post(rpc_url)
                     .header("Content-Type", "application/json")
                     .json(&body)
                     .send().await
                 {
                     Ok(resp) => {
-                        println!("[ETC] RPC status: {}", resp.status());
                         if resp.status().is_success() {
                             if let Ok(data) = resp.json::<serde_json::Value>().await {
-                                println!("[ETC] RPC response: {}", serde_json::to_string(&data).unwrap_or_default().chars().take(300).collect::<String>());
                                 if let Some(hex_str) = data.get("result").and_then(|r| r.as_str()) {
                                     let hex_clean = hex_str.trim_start_matches("0x");
                                     if !hex_clean.is_empty() {
                                         if let Ok(wei) = u128::from_str_radix(hex_clean, 16) {
                                             let bal = wei as f64 / 1_000_000_000_000_000_000.0;
-                                            println!("[ETC] RPC OK: {} ETC", bal);
                                             return Ok(bal);
                                         }
                                     }
                                 }
-                                if let Some(err) = data.get("error") {
-                                    println!("[ETC] RPC error: {:?}", err);
-                                }
                             }
                         }
                     }
-                    Err(e) => println!("[ETC] RPC network error: {}", e),
+                    Err(_e) => {}
                 }
             }
 
             // 2) Blockscout ETC API
             let url2 = format!("https://blockscout.com/etc/mainnet/api?module=account&action=balance&address={}", address);
-            println!("[ETC] Try Blockscout: {}", url2);
             if let Ok(resp) = client.get(&url2).send().await {
-                println!("[ETC] Blockscout status: {}", resp.status());
                 if resp.status().is_success() {
                     if let Ok(data) = resp.json::<serde_json::Value>().await {
                         if data.get("status").and_then(|s| s.as_str()) == Some("1") {
                             if let Some(result) = data.get("result").and_then(|r| r.as_str()) {
                                 if let Ok(wei) = result.parse::<u128>() {
                                     let bal = wei as f64 / 1_000_000_000_000_000_000.0;
-                                    println!("[ETC] Blockscout OK: {} ETC", bal);
                                     return Ok(bal);
                                 }
                             }
@@ -2352,16 +2413,13 @@ async fn fetch_balance(state: State<'_, DbState>, asset: String, address: String
 
             // 3) Blockchair fallback
             let url3 = format!("https://api.blockchair.com/ethereum/classic/dashboards/address/{}", address);
-            println!("[ETC] Try Blockchair: {}", url3);
             if let Ok(response) = client.get(&url3).send().await {
-                println!("[ETC] Blockchair status: {}", response.status());
                 if response.status().is_success() {
                     if let Ok(raw) = response.json::<serde_json::Value>().await {
                         if let Some(data) = raw.get("data").and_then(|d| d.as_object()) {
                             for (_key, addr_data) in data {
                                 if let Some(addr_info) = addr_data.get("address") {
                                     if let Some(b) = addr_info.get("balance").and_then(|v| v.as_i64()) {
-                                        println!("[ETC] Blockchair OK: {} wei", b);
                                         return Ok(b as f64 / 1_000_000_000_000_000_000.0);
                                     }
                                     if let Some(b) = addr_info.get("balance").and_then(|v| v.as_f64()) {
@@ -2378,7 +2436,6 @@ async fn fetch_balance(state: State<'_, DbState>, asset: String, address: String
 
         // ── ERC-20 tokens (LINK, UNI, AAVE) via Etherscan + RPC fallback ──
         "link" | "uni" | "aave" => {
-            println!("[ERC20] Fetching {} balance for: '{}'", asset, address);
             let contract = get_token_contract(&asset).ok_or("Token non supporté")?;
 
             // 1) Try Etherscan API first
@@ -2392,11 +2449,9 @@ async fn fetch_balance(state: State<'_, DbState>, asset: String, address: String
                     "https://api.etherscan.io/api?module=account&action=tokenbalance&contractaddress={}&address={}&tag=latest&apikey={}",
                     contract, address, api_key
                 );
-                println!("[ERC20] Trying Etherscan v1...");
                 match client.get(&url).send().await {
                     Ok(resp) if resp.status().is_success() => {
                         if let Ok(data) = resp.json::<serde_json::Value>().await {
-                            println!("[ERC20] Etherscan response: {}", serde_json::to_string(&data).unwrap_or_default().chars().take(300).collect::<String>());
                             let status = data.get("status").and_then(|s| s.as_str()).unwrap_or("0");
                             if status == "1" {
                                 let raw = match data.get("result") {
@@ -2405,17 +2460,13 @@ async fn fetch_balance(state: State<'_, DbState>, asset: String, address: String
                                     _ => 0.0,
                                 };
                                 let token_bal = raw / 1_000_000_000_000_000_000.0;
-                                println!("[ERC20] Etherscan OK: {} {}", token_bal, asset.to_uppercase());
                                 return Ok(token_bal);
                             }
-                            println!("[ERC20] Etherscan error: {:?}", data.get("result"));
                         }
                     }
-                    Ok(resp) => println!("[ERC20] Etherscan HTTP error: {}", resp.status()),
-                    Err(e) => println!("[ERC20] Etherscan network error: {}", e),
+                    Ok(_resp) => {}
+                    Err(_e) => {}
                 }
-            } else {
-                println!("[ERC20] No Etherscan key, skipping to RPC");
             }
 
             // 2) Fallback: RPC eth_call with balanceOf(address)
@@ -2427,7 +2478,6 @@ async fn fetch_balance(state: State<'_, DbState>, asset: String, address: String
                 "https://rpc.ankr.com/eth",
             ];
             for rpc_url in &rpc_urls {
-                println!("[ERC20] Try RPC: {}", rpc_url);
                 let body = serde_json::json!({
                     "jsonrpc": "2.0",
                     "method": "eth_call",
@@ -2442,18 +2492,14 @@ async fn fetch_balance(state: State<'_, DbState>, asset: String, address: String
                                 if !hex_clean.is_empty() && hex_clean != "0" {
                                     if let Ok(raw) = u128::from_str_radix(hex_clean, 16) {
                                         let token_bal = raw as f64 / 1_000_000_000_000_000_000.0;
-                                        println!("[ERC20] RPC OK: {} {}", token_bal, asset.to_uppercase());
                                         return Ok(token_bal);
                                     }
                                 }
                             }
-                            if let Some(err) = data.get("error") {
-                                println!("[ERC20] RPC error: {:?}", err);
-                            }
                         }
                     }
-                    Ok(resp) => println!("[ERC20] RPC HTTP error: {}", resp.status()),
-                    Err(e) => println!("[ERC20] RPC network error: {}", e),
+                    Ok(_resp) => {}
+                    Err(_e) => {}
                 }
             }
             Err(format!("Balance {} non trouvée", asset.to_uppercase()))
@@ -2539,16 +2585,12 @@ async fn fetch_balance(state: State<'_, DbState>, asset: String, address: String
 
         // ── DOGE via Blockcypher + Blockchair ──
         "doge" => {
-            println!("[DOGE] Fetching balance for: '{}'", address);
-
             // 1) Blockcypher
             let url1 = format!("https://api.blockcypher.com/v1/doge/main/addrs/{}/balance", address);
-            println!("[DOGE] Try Blockcypher: {}", url1);
             if let Ok(resp) = client.get(&url1).send().await {
                 if resp.status().is_success() {
                     if let Ok(data) = resp.json::<BlockcypherAddress>().await {
                         if let Some(bal) = data.final_balance.or(data.balance) {
-                            println!("[DOGE] Blockcypher OK: {} satoshis", bal);
                             return Ok(bal as f64 / 100_000_000.0);
                         }
                     }
@@ -2557,7 +2599,6 @@ async fn fetch_balance(state: State<'_, DbState>, asset: String, address: String
 
             // 2) Blockchair
             let url2 = format!("https://api.blockchair.com/dogecoin/dashboards/address/{}", address);
-            println!("[DOGE] Try Blockchair: {}", url2);
             if let Ok(resp) = client.get(&url2).send().await {
                 if resp.status().is_success() {
                     if let Ok(raw) = resp.json::<serde_json::Value>().await {
@@ -2565,7 +2606,6 @@ async fn fetch_balance(state: State<'_, DbState>, asset: String, address: String
                             for (_key, addr_data) in data {
                                 if let Some(addr_info) = addr_data.get("address") {
                                     if let Some(b) = addr_info.get("balance").and_then(|v| v.as_i64()) {
-                                        println!("[DOGE] Blockchair OK: {} satoshis", b);
                                         return Ok(b as f64 / 100_000_000.0);
                                     }
                                     if let Some(b) = addr_info.get("balance").and_then(|v| v.as_f64()) {
@@ -2582,7 +2622,6 @@ async fn fetch_balance(state: State<'_, DbState>, asset: String, address: String
 
         // ── DASH via Blockchair ──
         "dash" => {
-            println!("[DASH] Fetching balance for: '{}'", address);
             let url = format!("https://api.blockchair.com/dash/dashboards/address/{}", address);
             if let Ok(resp) = client.get(&url).send().await {
                 if resp.status().is_success() {
@@ -2591,7 +2630,6 @@ async fn fetch_balance(state: State<'_, DbState>, asset: String, address: String
                             for (_key, addr_data) in data {
                                 if let Some(addr_info) = addr_data.get("address") {
                                     if let Some(b) = addr_info.get("balance").and_then(|v| v.as_i64()) {
-                                        println!("[DASH] Blockchair OK: {} duffs", b);
                                         return Ok(b as f64 / 100_000_000.0);
                                     }
                                     if let Some(b) = addr_info.get("balance").and_then(|v| v.as_f64()) {
@@ -2608,8 +2646,6 @@ async fn fetch_balance(state: State<'_, DbState>, asset: String, address: String
 
         // ── NEAR via RPC + nearblocks fallback ──
         "near" => {
-            println!("[NEAR] Fetching balance for: '{}'", address);
-
             // 1) NEAR RPC mainnet (multiple endpoints)
             let near_body = serde_json::json!({
                 "jsonrpc": "2.0",
@@ -2621,62 +2657,47 @@ async fn fetch_balance(state: State<'_, DbState>, asset: String, address: String
                     "account_id": &address
                 }
             });
-            println!("[NEAR] Request body: {}", serde_json::to_string(&near_body).unwrap_or_default());
             let rpc_urls = [
                 "https://rpc.mainnet.near.org",
                 "https://rpc.fastnear.com",
                 "https://near.lava.build",
             ];
             for rpc_url in rpc_urls {
-                println!("[NEAR] Try RPC: {}", rpc_url);
                 match client.post(rpc_url)
                     .header("Content-Type", "application/json")
                     .json(&near_body)
                     .send().await
                 {
                     Ok(resp) => {
-                        println!("[NEAR] RPC status: {}", resp.status());
                         if resp.status().is_success() {
                             if let Ok(data) = resp.json::<serde_json::Value>().await {
-                                let resp_str: String = serde_json::to_string(&data).unwrap_or_default().chars().take(500).collect();
-                                println!("[NEAR] RPC response: {}", resp_str);
                                 if let Some(amount_str) = data.get("result")
                                     .and_then(|r| r.get("amount"))
                                     .and_then(|a| a.as_str())
                                 {
-                                    println!("[NEAR] Found amount: {}", amount_str);
                                     if let Ok(yocto) = amount_str.parse::<u128>() {
                                         let near_bal = yocto as f64 / 1_000_000_000_000_000_000_000_000.0;
-                                        println!("[NEAR] RPC OK: {} NEAR", near_bal);
                                         return Ok(near_bal);
                                     }
-                                }
-                                if let Some(err) = data.get("error") {
-                                    println!("[NEAR] RPC error: {:?}", err);
                                 }
                             }
                         }
                     }
-                    Err(e) => println!("[NEAR] RPC network error: {}", e),
+                    Err(_e) => {}
                 }
             }
 
             // 2) NearBlocks API fallback
             let url2 = format!("https://api.nearblocks.io/v1/account/{}", address);
-            println!("[NEAR] Try NearBlocks: {}", url2);
             match client.get(&url2).send().await {
                 Ok(resp) => {
-                    println!("[NEAR] NearBlocks status: {}", resp.status());
                     if resp.status().is_success() {
                         if let Ok(data) = resp.json::<serde_json::Value>().await {
-                            let resp_str: String = serde_json::to_string(&data).unwrap_or_default().chars().take(500).collect();
-                            println!("[NEAR] NearBlocks response: {}", resp_str);
                             if let Some(acc_arr) = data.get("account").and_then(|a| a.as_array()) {
                                 if let Some(first) = acc_arr.first() {
                                     if let Some(amount_str) = first.get("amount").and_then(|a| a.as_str()) {
                                         if let Ok(yocto) = amount_str.parse::<u128>() {
                                             let near_bal = yocto as f64 / 1_000_000_000_000_000_000_000_000.0;
-                                            println!("[NEAR] NearBlocks OK: {} NEAR", near_bal);
                                             return Ok(near_bal);
                                         }
                                     }
@@ -2685,14 +2706,13 @@ async fn fetch_balance(state: State<'_, DbState>, asset: String, address: String
                         }
                     }
                 }
-                Err(e) => println!("[NEAR] NearBlocks network error: {}", e),
+                Err(_e) => {}
             }
             Err("Balance NEAR non trouvée — utilisez le nom de compte (ex: moncompte.near)".to_string())
         }
 
         // ── ADA via Koios (free, no API key) ──
         "ada" => {
-            println!("[ADA] Fetching balance for: '{}'", address);
             let url = "https://api.koios.rest/api/v1/address_info";
             let body = serde_json::json!({ "_addresses": [address] });
             if let Ok(resp) = client.post(url)
@@ -2700,7 +2720,6 @@ async fn fetch_balance(state: State<'_, DbState>, asset: String, address: String
                 .json(&body)
                 .send().await
             {
-                println!("[ADA] Koios status: {}", resp.status());
                 if resp.status().is_success() {
                     if let Ok(data) = resp.json::<serde_json::Value>().await {
                         // Returns array: [{ "balance": "123456789", ... }]
@@ -2709,7 +2728,6 @@ async fn fetch_balance(state: State<'_, DbState>, asset: String, address: String
                                 if let Some(bal_str) = first.get("balance").and_then(|b| b.as_str()) {
                                     if let Ok(lovelace) = bal_str.parse::<f64>() {
                                         let ada_bal = lovelace / 1_000_000.0;
-                                        println!("[ADA] Koios OK: {} ADA", ada_bal);
                                         return Ok(ada_bal);
                                     }
                                 }
@@ -2746,16 +2764,13 @@ async fn fetch_balance(state: State<'_, DbState>, asset: String, address: String
 
         // ── QTUM via qtum.info ──
         "qtum" => {
-            println!("[QTUM] Fetching balance for: '{}'", address);
             let url = format!("https://qtum.info/api/address/{}", address);
             if let Ok(resp) = client.get(&url).send().await {
-                println!("[QTUM] Status: {}", resp.status());
                 if resp.status().is_success() {
                     if let Ok(data) = resp.json::<serde_json::Value>().await {
                         // balance is string like "123.45678900"
                         if let Some(bal_str) = data.get("balance").and_then(|b| b.as_str()) {
                             if let Ok(bal) = bal_str.parse::<f64>() {
-                                println!("[QTUM] OK: {} QTUM", bal);
                                 return Ok(bal);
                             }
                         }
@@ -2788,8 +2803,6 @@ async fn fetch_balance(state: State<'_, DbState>, asset: String, address: String
 
         // ── AVAX via C-Chain RPC (primary) + Routescan (fallback) ──
         "avax" => {
-            println!("[AVAX] Fetching balance for: '{}'", address);
-
             // 1) Direct C-Chain JSON-RPC (eth_getBalance) — multiple endpoints
             let avax_body = serde_json::json!({
                 "jsonrpc": "2.0",
@@ -2802,35 +2815,27 @@ async fn fetch_balance(state: State<'_, DbState>, asset: String, address: String
                 "https://avalanche-c-chain-rpc.publicnode.com",
             ];
             for rpc_url in avax_rpcs {
-                println!("[AVAX] Try RPC: {}", rpc_url);
                 match client.post(rpc_url)
                     .header("Content-Type", "application/json")
                     .json(&avax_body)
                     .send().await
                 {
                     Ok(resp) => {
-                        println!("[AVAX] RPC status: {}", resp.status());
                         if resp.status().is_success() {
                             if let Ok(data) = resp.json::<serde_json::Value>().await {
-                                let resp_str: String = serde_json::to_string(&data).unwrap_or_default().chars().take(300).collect();
-                                println!("[AVAX] RPC response: {}", resp_str);
                                 if let Some(hex_str) = data.get("result").and_then(|r| r.as_str()) {
                                     let hex_clean = hex_str.trim_start_matches("0x");
                                     if !hex_clean.is_empty() {
                                         if let Ok(wei) = u128::from_str_radix(hex_clean, 16) {
                                             let avax_bal = wei as f64 / 1_000_000_000_000_000_000.0;
-                                            println!("[AVAX] RPC OK: {} AVAX", avax_bal);
                                             return Ok(avax_bal);
                                         }
                                     }
                                 }
-                                if let Some(err) = data.get("error") {
-                                    println!("[AVAX] RPC error: {:?}", err);
-                                }
                             }
                         }
                     }
-                    Err(e) => println!("[AVAX] RPC network error: {}", e),
+                    Err(_e) => {}
                 }
             }
 
@@ -2839,18 +2844,14 @@ async fn fetch_balance(state: State<'_, DbState>, asset: String, address: String
                 "https://api.routescan.io/v2/network/mainnet/evm/43114/etherscan/api?module=account&action=balance&address={}&tag=latest",
                 address
             );
-            println!("[AVAX] Try Routescan: {}", url2);
             match client.get(&url2).send().await {
                 Ok(resp) => {
-                    println!("[AVAX] Routescan status: {}", resp.status());
                     if resp.status().is_success() {
                         if let Ok(data) = resp.json::<serde_json::Value>().await {
-                            println!("[AVAX] Routescan response: {}", serde_json::to_string(&data).unwrap_or_default().chars().take(300).collect::<String>());
                             if data.get("status").and_then(|s| s.as_str()) == Some("1") {
                                 if let Some(result) = data.get("result").and_then(|r| r.as_str()) {
                                     if let Ok(wei) = result.parse::<u128>() {
                                         let avax_bal = wei as f64 / 1_000_000_000_000_000_000.0;
-                                        println!("[AVAX] Routescan OK: {} AVAX", avax_bal);
                                         return Ok(avax_bal);
                                     }
                                 }
@@ -2858,14 +2859,13 @@ async fn fetch_balance(state: State<'_, DbState>, asset: String, address: String
                         }
                     }
                 }
-                Err(e) => println!("[AVAX] Routescan network error: {}", e),
+                Err(_e) => {}
             }
             Err("Balance AVAX non trouvée — utilisez une adresse C-Chain (0x...)".to_string())
         }
 
         // ── XRP via XRPL public JSON-RPC ──
         "xrp" => {
-            println!("[XRP] Fetching balance for: '{}'", address);
             let body = serde_json::json!({
                 "method": "account_info",
                 "params": [{
@@ -2892,7 +2892,6 @@ async fn fetch_balance(state: State<'_, DbState>, asset: String, address: String
                         {
                             if let Ok(drops) = balance_str.parse::<f64>() {
                                 let xrp_bal = drops / 1_000_000.0;
-                                println!("[XRP] Ripple OK: {} XRP", xrp_bal);
                                 return Ok(xrp_bal);
                             }
                         }
@@ -2927,47 +2926,37 @@ async fn fetch_balance(state: State<'_, DbState>, asset: String, address: String
 
         // ── SOL via Solana JSON-RPC ──
         "sol" => {
-            println!("[SOL] Fetching balance for: '{}'", address);
             let sol_body = serde_json::json!({
                 "jsonrpc": "2.0",
                 "id": 1,
                 "method": "getBalance",
                 "params": [&address]
             });
-            println!("[SOL] Request body: {}", serde_json::to_string(&sol_body).unwrap_or_default());
             let rpc_urls = [
                 "https://api.mainnet-beta.solana.com",
                 "https://solana-rpc.publicnode.com",
             ];
             for rpc_url in rpc_urls {
-                println!("[SOL] Try RPC: {}", rpc_url);
                 match client.post(rpc_url)
                     .header("Content-Type", "application/json")
                     .json(&sol_body)
                     .send().await
                 {
                     Ok(resp) => {
-                        println!("[SOL] RPC status: {}", resp.status());
                         if resp.status().is_success() {
                             if let Ok(data) = resp.json::<serde_json::Value>().await {
-                                let resp_str: String = serde_json::to_string(&data).unwrap_or_default().chars().take(500).collect();
-                                println!("[SOL] RPC response: {}", resp_str);
                                 // { "result": { "context": {...}, "value": 123456789 } }
                                 if let Some(lamports) = data.get("result")
                                     .and_then(|r| r.get("value"))
                                     .and_then(|v| v.as_u64())
                                 {
                                     let sol_bal = lamports as f64 / 1_000_000_000.0;
-                                    println!("[SOL] RPC OK: {} SOL", sol_bal);
                                     return Ok(sol_bal);
-                                }
-                                if let Some(err) = data.get("error") {
-                                    println!("[SOL] RPC error: {:?}", err);
                                 }
                             }
                         }
                     }
-                    Err(e) => println!("[SOL] RPC network error: {}", e),
+                    Err(_e) => {}
                 }
             }
             Err("Balance SOL non trouvée — vérifiez la clé publique Solana".to_string())
@@ -2990,6 +2979,12 @@ fn get_profiles_dir() -> std::path::PathBuf {
         .join("janus-monitor")
         .join("profiles");
     std::fs::create_dir_all(&dir).ok();
+    // Set profiles directory permissions to 0700 (owner only)
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
+    }
     dir
 }
 
@@ -3011,9 +3006,9 @@ fn list_profiles() -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
-fn save_profile(state: State<DbState>, name: String, theme: Option<String>) -> Result<(), String> {
+fn save_profile(state: State<DbState>, session_key: State<SessionKeyState>, name: String, theme: Option<String>) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    
+
     let mut cat_stmt = conn
         .prepare("SELECT id, name, color, bar_color, display_order FROM categories ORDER BY display_order")
         .map_err(|e| e.to_string())?;
@@ -3049,21 +3044,53 @@ fn save_profile(state: State<DbState>, name: String, theme: Option<String>) -> R
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| e.to_string())?;
 
-    let data = ProfileData { categories, wallets, theme };
+    // Encrypt wallet addresses in profile if session key exists
+    let key_state = session_key.0.lock().map_err(|e| e.to_string())?;
+    let (final_wallets, is_encrypted) = if let Some(ref key_bytes) = *key_state {
+        let mut encrypted_wallets = wallets;
+        for w in &mut encrypted_wallets {
+            w.address = encrypt_string_with_key(&w.address, key_bytes)?;
+        }
+        (encrypted_wallets, true)
+    } else {
+        (wallets, false)
+    };
+    drop(key_state);
+
+    let data = ProfileData { categories, wallets: final_wallets, theme, encrypted: is_encrypted };
     let json = serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?;
     let path = get_profiles_dir().join(format!("{}.json", name));
-    std::fs::write(path, json).map_err(|e| e.to_string())?;
+    std::fs::write(&path, json).map_err(|e| e.to_string())?;
+    // Set profile file permissions to 0600 (owner read/write only)
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    }
     Ok(())
 }
 
 #[tauri::command]
-fn load_profile(state: State<DbState>, name: String) -> Result<LoadProfileResult, String> {
+fn load_profile(state: State<DbState>, session_key: State<SessionKeyState>, name: String) -> Result<LoadProfileResult, String> {
     let path = get_profiles_dir().join(format!("{}.json", name));
     let json = std::fs::read_to_string(&path).map_err(|e| format!("Profil introuvable: {}", e))?;
 
     let conn = state.0.lock().map_err(|e| e.to_string())?;
 
-    if let Ok(data) = serde_json::from_str::<ProfileData>(&json) {
+    if let Ok(mut data) = serde_json::from_str::<ProfileData>(&json) {
+        // Decrypt wallet addresses if profile was saved encrypted
+        if data.encrypted {
+            let key_state = session_key.0.lock().map_err(|e| e.to_string())?;
+            if let Some(ref key_bytes) = *key_state {
+                for w in &mut data.wallets {
+                    w.address = decrypt_string_with_key(&w.address, key_bytes)
+                        .unwrap_or_else(|_| w.address.clone());
+                }
+            } else {
+                return Err("Profil chiffré — déverrouillez d'abord avec votre PIN".to_string());
+            }
+        }
+
         conn.execute("DELETE FROM categories", []).map_err(|e| e.to_string())?;
         for cat in data.categories {
             conn.execute(
@@ -3071,7 +3098,7 @@ fn load_profile(state: State<DbState>, name: String) -> Result<LoadProfileResult
                 params![cat.id, cat.name, cat.color, cat.bar_color, cat.display_order],
             ).map_err(|e| e.to_string())?;
         }
-        
+
         conn.execute("DELETE FROM wallets", []).map_err(|e| e.to_string())?;
         for w in data.wallets {
             conn.execute(
@@ -3079,7 +3106,7 @@ fn load_profile(state: State<DbState>, name: String) -> Result<LoadProfileResult
                 params![w.category_id, w.asset, w.name, w.address, w.balance],
             ).map_err(|e| e.to_string())?;
         }
-        
+
         return Ok(LoadProfileResult { theme: data.theme });
     }
     
@@ -3130,6 +3157,22 @@ fn reset_wallets(state: State<DbState>) -> Result<(), String> {
 
 #[tauri::command]
 fn save_csv_file(path: String, content: String) -> Result<(), String> {
+    // Validate: only allow writing to home directory, must end in .csv
+    let home = std::env::var("HOME").map_err(|_| "HOME not set".to_string())?;
+    let canon_home = std::fs::canonicalize(&home).map_err(|e| e.to_string())?;
+    let target = std::path::PathBuf::from(&path);
+    // Resolve parent dir to prevent path traversal
+    if let Some(parent) = target.parent() {
+        let canon_parent = std::fs::canonicalize(parent).map_err(|e| format!("Invalid path: {}", e))?;
+        if !canon_parent.starts_with(&canon_home) {
+            return Err("CSV export only allowed within home directory".to_string());
+        }
+    } else {
+        return Err("Invalid file path".to_string());
+    }
+    if !path.ends_with(".csv") {
+        return Err("Only .csv files allowed".to_string());
+    }
     std::fs::write(&path, content.as_bytes()).map_err(|e| e.to_string())
 }
 
@@ -3140,6 +3183,13 @@ fn get_home_dir() -> Result<String, String> {
 
 #[tauri::command]
 fn open_url(url: String) -> Result<(), String> {
+    // Only allow http/https URLs to prevent command injection
+    if !url.starts_with("https://") && !url.starts_with("http://") {
+        return Err("Only http/https URLs are allowed".to_string());
+    }
+    if url.len() > 2048 {
+        return Err("URL too long".to_string());
+    }
     std::process::Command::new("xdg-open")
         .arg(&url)
         .spawn()
@@ -3147,9 +3197,134 @@ fn open_url(url: String) -> Result<(), String> {
     Ok(())
 }
 
-// 
+//
+// ENCRYPTION COMMANDS
+//
+
+#[tauri::command]
+fn generate_new_salt() -> Result<String, String> {
+    let mut salt = [0u8; 32];
+    sodiumoxide::randombytes::randombytes_into(&mut salt);
+    Ok(hex::encode(salt))
+}
+
+#[tauri::command]
+fn init_encryption_system() -> Result<(), String> {
+    sodiumoxide::init().map_err(|_| "Failed to initialize crypto library".to_string())?;
+    Ok(())
+}
+
+// test_encryption_backend: tests encrypt/decrypt entirely on Rust side using session key
+// Returns only success/failure — no keys or plaintext ever cross IPC
+#[tauri::command]
+fn test_encryption_backend(session_key: State<SessionKeyState>) -> Result<bool, String> {
+    let key_state = session_key.0.lock().map_err(|e| e.to_string())?;
+    let key_bytes = key_state.as_ref().ok_or("No session key — unlock required")?;
+    let test_data = "janus_encryption_test_ok";
+    let encrypted = encrypt_string_with_key(test_data, key_bytes)?;
+    let decrypted = decrypt_string_with_key(&encrypted, key_bytes)?;
+    Ok(decrypted == test_data)
+}
+
+// 🔒 Lock session — clear session key from memory
+#[tauri::command]
+fn lock_session(session_key: State<SessionKeyState>) -> Result<(), String> {
+    let mut key_state = session_key.0.lock().map_err(|e| e.to_string())?;
+    if let Some(ref mut key) = *key_state {
+        // Zero out key memory before dropping
+        for byte in key.iter_mut() {
+            *byte = 0;
+        }
+    }
+    *key_state = None;
+    eprintln!("[SECURITY] Session encryption key cleared");
+    Ok(())
+}
+
+// 🔒 Encrypt wallet data using session key
+#[tauri::command]
+fn encrypt_wallet_data(session_key: State<SessionKeyState>, data: String) -> Result<String, String> {
+    let key_state = session_key.0.lock().map_err(|e| e.to_string())?;
+    let key_bytes = key_state.as_ref().ok_or("No session key — unlock required")?;
+    if key_bytes.len() < secretbox::KEYBYTES {
+        return Err("Session key too short".to_string());
+    }
+    let key = secretbox::Key::from_slice(&key_bytes[..secretbox::KEYBYTES])
+        .ok_or("Invalid session key")?;
+    let nonce = secretbox::gen_nonce();
+    let encrypted = secretbox::seal(data.as_bytes(), &nonce, &key);
+    Ok(format!("{}:{}", hex::encode(nonce.as_ref()), hex::encode(&encrypted)))
+}
+
+// 🔒 Decrypt wallet data using session key
+#[tauri::command]
+fn decrypt_wallet_data(session_key: State<SessionKeyState>, encrypted_data: String) -> Result<String, String> {
+    let key_state = session_key.0.lock().map_err(|e| e.to_string())?;
+    let key_bytes = key_state.as_ref().ok_or("No session key — unlock required")?;
+    if key_bytes.len() < secretbox::KEYBYTES {
+        return Err("Session key too short".to_string());
+    }
+    let key = secretbox::Key::from_slice(&key_bytes[..secretbox::KEYBYTES])
+        .ok_or("Invalid session key")?;
+    let parts: Vec<&str> = encrypted_data.splitn(2, ':').collect();
+    if parts.len() != 2 {
+        return Err("Invalid encrypted data format".to_string());
+    }
+    let nonce_bytes = hex::decode(parts[0]).map_err(|e| format!("Invalid nonce: {}", e))?;
+    let nonce = secretbox::Nonce::from_slice(&nonce_bytes).ok_or("Invalid nonce")?;
+    let ciphertext = hex::decode(parts[1]).map_err(|e| format!("Invalid ciphertext: {}", e))?;
+    let decrypted = secretbox::open(&ciphertext, &nonce, &key)
+        .map_err(|_| "Decryption failed")?;
+    String::from_utf8(decrypted).map_err(|e| format!("Invalid UTF-8: {}", e))
+}
+
+// 🔒 Encrypt API key using PIN-derived key
+#[tauri::command]
+fn encrypt_api_key_with_pin(session_key: State<SessionKeyState>, api_key: String) -> Result<String, String> {
+    let key_state = session_key.0.lock().map_err(|e| e.to_string())?;
+    let key_bytes = key_state.as_ref().ok_or("No session key — unlock required")?;
+    if key_bytes.len() < secretbox::KEYBYTES {
+        return Err("Session key too short".to_string());
+    }
+    let key = secretbox::Key::from_slice(&key_bytes[..secretbox::KEYBYTES])
+        .ok_or("Invalid session key")?;
+    let nonce = secretbox::gen_nonce();
+    let encrypted = secretbox::seal(api_key.as_bytes(), &nonce, &key);
+    Ok(format!("{}:{}", hex::encode(nonce.as_ref()), hex::encode(&encrypted)))
+}
+
+// 🔒 Decrypt API key using PIN-derived key
+#[tauri::command]
+fn decrypt_api_key_with_pin(session_key: State<SessionKeyState>, encrypted_key: String) -> Result<String, String> {
+    let key_state = session_key.0.lock().map_err(|e| e.to_string())?;
+    let key_bytes = key_state.as_ref().ok_or("No session key — unlock required")?;
+    if key_bytes.len() < secretbox::KEYBYTES {
+        return Err("Session key too short".to_string());
+    }
+    let key = secretbox::Key::from_slice(&key_bytes[..secretbox::KEYBYTES])
+        .ok_or("Invalid session key")?;
+    let parts: Vec<&str> = encrypted_key.splitn(2, ':').collect();
+    if parts.len() != 2 {
+        return Err("Invalid encrypted key format".to_string());
+    }
+    let nonce_bytes = hex::decode(parts[0]).map_err(|e| format!("Invalid nonce: {}", e))?;
+    let nonce = secretbox::Nonce::from_slice(&nonce_bytes).ok_or("Invalid nonce")?;
+    let ciphertext = hex::decode(parts[1]).map_err(|e| format!("Invalid ciphertext: {}", e))?;
+    let decrypted = secretbox::open(&ciphertext, &nonce, &key)
+        .map_err(|_| "Decryption failed — wrong PIN or corrupted data")?;
+    String::from_utf8(decrypted).map_err(|e| format!("Invalid UTF-8: {}", e))
+}
+
+// 🔒 Check if session has an active encryption key
+#[tauri::command]
+fn has_session_key(session_key: State<SessionKeyState>) -> Result<bool, String> {
+    let key_state = session_key.0.lock().map_err(|e| e.to_string())?;
+    Ok(key_state.is_some())
+}
+
+//
 // RUN
-// 
+//
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -3175,6 +3350,7 @@ pub fn run() {
     tauri::Builder::default()
     .plugin(tauri_plugin_shell::init())
     .manage(DbState(Mutex::new(conn)))
+    .manage(SessionKeyState(Mutex::new(None)))  // 🔒 Session encryption key
     .manage(monitoring_state.clone())  // ✨ NOUVEAU
     .setup(move |app| {
         // Démarrer la tâche de monitoring
@@ -3217,7 +3393,16 @@ pub fn run() {
             set_profile_pin,
             verify_profile_pin,
             remove_profile_pin,
-            get_pin_status,             // 🔒 Rate limit status
+            get_pin_status,
+            generate_new_salt,
+            init_encryption_system,
+            test_encryption_backend,
+            lock_session,                    // 🔒 Clear session key
+            encrypt_wallet_data,             // 🔒 Encrypt with session key
+            decrypt_wallet_data,             // 🔒 Decrypt with session key
+            encrypt_api_key_with_pin,        // 🔒 Encrypt API key
+            decrypt_api_key_with_pin,        // 🔒 Decrypt API key
+            has_session_key,                 // 🔒 Check session key
             test_monero_node,               // 🪙 MONERO: Test nœud
             get_monero_balance,             // 🪙 MONERO: Balance
             get_monero_transactions,        // 🪙 MONERO: Historique
