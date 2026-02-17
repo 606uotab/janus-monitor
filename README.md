@@ -1,10 +1,10 @@
-# JANUS Monitor v2.3.1
+# JANUS Monitor v2.4
 
 Application desktop et mobile pour suivre en temps réel un portefeuille crypto selon la stratégie JANUS : **85 % Bitcoin** en réserve de valeur, **15 % diversification** entre hedging et altcoins.
 
 ![Tauri](https://img.shields.io/badge/Tauri%202-Rust%20%2B%20React-blue)
 ![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20Android-orange)
-![Version](https://img.shields.io/badge/Version-2.3.1-green)
+![Version](https://img.shields.io/badge/Version-2.4-green)
 ![Security](https://img.shields.io/badge/Security-Argon2id%20%2B%20TOTP%20%2B%20libsodium-red)
 
 ---
@@ -44,7 +44,7 @@ Application desktop et mobile pour suivre en temps réel un portefeuille crypto 
 - Le theme et les donnees ne sont jamais affiches avant l'authentification
 
 ### Historique blockchain *(v2.0)*
-- Récupération des 10 dernières transactions par wallet
+- Récupération des 10 dernières transactions par wallet (BTC, ETH, LTC, BCH, DOT, ETC)
 - Export CSV avec filtres (plage de dates, sélection de wallets)
 
 ### Gestion multi-wallet
@@ -53,10 +53,11 @@ Application desktop et mobile pour suivre en temps réel un portefeuille crypto 
 - QR code pour chaque adresse
 - Édition inline avec sauvegarde automatique
 
-### Profils
+### Profils *(v2.0 + export/import v2.4)*
 - Profils multiples sauvegardés indépendamment
 - Profil anonyme temporaire (non sauvegardé, mode sombre)
 - Auto-save toutes les 2 minutes
+- **Export/Import** : sauvegarde et restauration de profils en JSON (transfert desktop ↔ Android)
 
 ### Thèmes
 | Thème | Type | Description |
@@ -69,12 +70,13 @@ Application desktop et mobile pour suivre en temps réel un portefeuille crypto 
 | Solarpunk | Special Edition v2.3.0 | Fond JPEG Art Nouveau avec ville cyberpunk en ombre floue, collines verdoyantes, pollen doré animé |
 | St. Jude | Special Edition v2.3 | Hommage cypherpunk à Jude Milhon — verre émeraude sombre, PGP watermark défilant, citations hex/binaire/octal, portraits |
 
-### Intégrations blockchain *(v2.2)*
-- **Monero (XMR)** — Intégration noeud RPC (view key + spend key), saisie manuelle, prix Bitfinex
+### Intégrations blockchain *(v2.2 + RPC v2.4)*
+- **Monero (XMR)** — Intégration daemon RPC (`get_info`) et wallet-rpc (`get_balance`, `get_transfers`), view key + spend key stockées et chiffrées, saisie manuelle en fallback, prix Bitfinex
 - **PIVX** — Intégration noeud RPC (balance régulière + zPIV), saisie manuelle
-- Architecture par famille de blockchains
+- **BCH** — Normalisation automatique CashAddr (`bitcoincash:` prefix) pour compatibilité Blockchair
+- Architecture par famille de blockchains (UTXO, EVM, Privacy, Stablecoins)
 
-### Android *(v2.3.1)*
+### Android *(v2.4)*
 - Port natif via Tauri Mobile (même codebase Rust + React)
 - APK release signé (~12 MB ARM64)
 - Compatible Android 7+ (API 24)
@@ -90,7 +92,7 @@ Application desktop et mobile pour suivre en temps réel un portefeuille crypto 
 | **BTC** | Blockstream (fallback Blockcypher → Blockchair) |
 | **BCH** | Blockchair |
 | **LTC** | Blockchair |
-| **XMR** | Saisie manuelle (blockchain privée) + noeud RPC optionnel |
+| **XMR** | Saisie manuelle + wallet-rpc optionnel (view key + spend key chiffrées) |
 | **PIVX** | Saisie manuelle + noeud RPC optionnel |
 
 ### Altcoins (fetch automatique)
@@ -121,14 +123,14 @@ Application desktop et mobile pour suivre en temps réel un portefeuille crypto 
 #### Depuis une release (.deb)
 
 ```bash
-sudo dpkg -i janus-monitor_2.3.1_amd64.deb
+sudo dpkg -i janus-monitor_2.4_amd64.deb
 ```
 
 #### Depuis une release (AppImage)
 
 ```bash
-chmod +x janus-monitor_2.3.1_amd64.AppImage
-./janus-monitor_2.3.1_amd64.AppImage
+chmod +x janus-monitor_2.4_amd64.AppImage
+./janus-monitor_2.4_amd64.AppImage
 ```
 
 > L'AppImage ne nécessite aucune installation. Il suffit de le rendre exécutable et de le lancer.
@@ -150,11 +152,11 @@ Ou transférer le fichier `.apk` sur le téléphone et l'ouvrir (activer "Source
 
 ## Mise à jour depuis une version antérieure
 
-### Mise à jour .deb (v1.x / v2.x → v2.3.1)
+### Mise à jour .deb (v1.x / v2.x → v2.4)
 
 ```bash
 # Le .deb remplace automatiquement l'ancienne version
-sudo dpkg -i janus-monitor_2.3.1_amd64.deb
+sudo dpkg -i janus-monitor_2.4_amd64.deb
 ```
 
 Vos données (profils, wallets, catégories) sont conservées automatiquement — elles sont stockées dans le répertoire de données Tauri (`~/.local/share/com.janus.monitor/`) et ne sont pas touchées par la mise à jour du paquet.
@@ -166,8 +168,8 @@ Vos données (profils, wallets, catégories) sont conservées automatiquement �
 rm janus-monitor_*_amd64.AppImage
 
 # 2. Rendre le nouveau exécutable et lancer
-chmod +x janus-monitor_2.3.1_amd64.AppImage
-./janus-monitor_2.3.1_amd64.AppImage
+chmod +x janus-monitor_2.4_amd64.AppImage
+./janus-monitor_2.4_amd64.AppImage
 ```
 
 ### Mise à jour depuis les sources (git pull)
@@ -250,8 +252,8 @@ Cette commande produit deux fichiers dans `src-tauri/target/release/bundle/` :
 
 | Format | Chemin | Usage |
 |--------|--------|-------|
-| **AppImage** | `bundle/appimage/janus-monitor_2.3.1_amd64.AppImage` | Exécutable portable, aucune installation requise |
-| **Debian (.deb)** | `bundle/deb/janus-monitor_2.3.1_amd64.deb` | Installation système via `dpkg -i` |
+| **AppImage** | `bundle/appimage/janus-monitor_2.4_amd64.AppImage` | Exécutable portable, aucune installation requise |
+| **Debian (.deb)** | `bundle/deb/janus-monitor_2.4_amd64.deb` | Installation système via `dpkg -i` |
 
 > **Note** : Le build release active LTO (Link-Time Optimization), strip des symboles et optimise la taille du binaire. La première compilation peut prendre plusieurs minutes.
 
@@ -316,9 +318,15 @@ L'APK signé se trouve dans `src-tauri/gen/android/app/build/outputs/apk/univers
 janus-monitor/
 ├── src/
 │   ├── App.jsx                       # Application principale React
-│   ├── PendingTransactionsPanel.jsx   # Panneau TX en attente
+│   ├── PendingTransactionsPanel.jsx   # Panneau TX en attente + historique + export CSV
 │   ├── TokenSearch.jsx               # Recherche de tokens
-│   ├── secureBackend.js              # Appels Tauri sécurisés
+│   ├── secureBackend.js              # Appels Tauri sécurisés (validation réponses)
+│   ├── integrations/                 # Architecture par famille de blockchains
+│   │   ├── index.js                  # Export centralisé
+│   │   ├── utxo-coins.js            # Famille UTXO (BTC, LTC, BCH, DOGE, DASH)
+│   │   ├── evm-coins.js             # Famille EVM (ETH, ERC-20, ETC, AVAX)
+│   │   ├── privacy-coins.js         # Famille Privacy (XMR, PIVX)
+│   │   └── stablecoins.js           # Stablecoins (USDT, USDC, DAI, EURC)
 │   ├── assets/
 │   │   ├── solarpunk_bg.jpg          # Fond Solarpunk (Art Nouveau + ville cyberpunk)
 │   │   └── generate_solarpunk_bg.py  # Script Cairo pour régénérer le fond
@@ -331,12 +339,12 @@ janus-monitor/
 ├── src-tauri/
 │   ├── src/
 │   │   ├── main.rs                   # Point d'entrée Tauri
-│   │   ├── lib.rs                    # Backend principal (commandes, API, DB)
+│   │   ├── lib.rs                    # Backend principal (commandes, API, DB, migrations)
 │   │   ├── pin_security.rs           # Hashage PIN Argon2id
 │   │   ├── totp_security.rs          # 2FA TOTP (generation, verification, chiffrement)
 │   │   ├── input_validation.rs       # Validation des entrées
 │   │   ├── secure_key_storage.rs     # Stockage de clés chiffré
-│   │   ├── monero_integration.rs     # Intégration noeud Monero RPC
+│   │   ├── monero_integration.rs     # Monero daemon RPC + wallet-rpc (balance, transfers)
 │   │   └── pivx_integration.rs       # Intégration noeud PIVX RPC
 │   └── gen/
 │       └── android/                  # Projet Android généré (Gradle, Kotlin)
