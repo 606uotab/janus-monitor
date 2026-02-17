@@ -1697,59 +1697,71 @@ const App = () => {
     };
 
     return (
-      <div className={`${T.rowBg} border ${T.rowBorder} rounded-lg px-3 py-2 flex items-center justify-between group`}>
-        <div className="flex items-center gap-3 cursor-pointer flex-1 min-w-0" onClick={() => startEdit(wallet)}>
-          <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${cfg.bg} ${cfg.color} flex-shrink-0`}>{cfg.symbol}</span>
-          <div className="min-w-0">
-            <div className="text-sm font-medium flex items-center gap-2">
-              {displayName}
-              {isWalletEncrypted(wallet) && <span className="text-amber-500 text-xs" title="Wallet chiffré">🔒</span>}
-              {isLoading && <span className="text-amber-500 text-xs animate-pulse">⟳</span>}
-              {moneroInfo && <span className="text-purple-400 text-xs" title="Clés Monero configurées">🔑</span>}
-            </div>
-            <div className={`font-mono text-xs ${T.textFaint} truncate`}>
-              {wallet.address && wallet.address !== '[ENCRYPTED]' ? maskAddress(wallet.address) : <span className={T.textFaint}>Aucune adresse</span>}
+      <div className="space-y-0">
+        <div className={`${T.rowBg} border ${T.rowBorder} ${moneroInfo ? 'rounded-lg' : 'rounded-t-lg border-b-0'} px-3 py-2 flex items-center justify-between group`}>
+          <div className="flex items-center gap-3 cursor-pointer flex-1 min-w-0" onClick={() => startEdit(wallet)}>
+            <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${cfg.bg} ${cfg.color} flex-shrink-0`}>{cfg.symbol}</span>
+            <div className="min-w-0">
+              <div className="text-sm font-medium flex items-center gap-2">
+                {displayName}
+                {isWalletEncrypted(wallet) && <span className="text-amber-500 text-xs" title="Wallet chiffré">🔒</span>}
+                {isLoading && <span className="text-amber-500 text-xs animate-pulse">⟳</span>}
+                {moneroInfo && <span className="text-green-400 text-xs" title="Noeud RPC configure">RPC</span>}
+              </div>
+              <div className={`font-mono text-xs ${T.textFaint} truncate`}>
+                {wallet.address && wallet.address !== '[ENCRYPTED]' ? maskAddress(wallet.address) : <span className={T.textFaint}>Aucune adresse</span>}
+              </div>
             </div>
           </div>
-        </div>
-        <div className="flex items-center gap-1.5 flex-shrink-0">
-          <div className="text-right cursor-pointer" onClick={() => startEdit(wallet)}>
-            <div className="font-medium tabular-nums">{displayBalance != null ? maskBalance(displayBalance, 8) : (isWalletEncrypted(wallet) ? '🔒 Chiffré' : '–')}<span className={`${T.textMuted} text-sm ml-1`}>{cfg.symbol}</span></div>
-            <div className={`text-xs ${T.textFaint} tabular-nums`}>{displayBalance != null ? maskBalance(valEur) : '–'} €</div>
-          </div>
-          <div className="flex items-center gap-0 opacity-0 group-hover:opacity-100 transition-all">
-            {wallet.address && (
-              <>
-                <button onClick={handleQuickCopy} title="Copier l'adresse"
-                  className={`p-1 rounded transition-all duration-300 ${isCopied ? 'text-green-400 scale-110' : `${T.textFaint} hover:text-amber-500`}`}>
-                  {isCopied ? <SaveIcon size={12} check /> : <CopyIcon size={12} />}
-                </button>
-                <button onClick={(e) => { e.stopPropagation(); setQrOverlay({ address: wallet.address, name: wallet.name }); }} title="QR Code"
-                  className={`p-1 rounded ${T.textFaint} hover:text-amber-500 transition-colors`}>
-                  <QRCodeIcon size={12} />
-                </button>
-              </>
-            )}
-            <button onClick={(e) => { e.stopPropagation(); openMoneroSetup(wallet); }} title={moneroInfo ? "Modifier les clés Monero" : "Configurer les clés Monero"}
-              className={`p-1 rounded ${moneroInfo ? 'text-green-400 hover:text-green-300' : 'text-purple-400 hover:text-purple-300'} transition-colors`}>
-              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/>
-              </svg>
-            </button>
-            {moneroInfo && (
-              <button onClick={(e) => { e.stopPropagation(); fetchMoneroBalance(wallet); }} title="Mettre à jour la balance Monero"
-                className={`p-1 rounded ${loading[wallet.id] ? 'text-amber-500 animate-pulse' : `${T.textFaint} hover:text-amber-500`} transition-colors`}>
+          <div className="flex items-center gap-1.5 flex-shrink-0">
+            <div className="text-right cursor-pointer" onClick={() => startEdit(wallet)}>
+              <div className="font-medium tabular-nums">{displayBalance != null ? maskBalance(displayBalance, 8) : (isWalletEncrypted(wallet) ? '🔒 Chiffré' : '–')}<span className={`${T.textMuted} text-sm ml-1`}>{cfg.symbol}</span></div>
+              <div className={`text-xs ${T.textFaint} tabular-nums`}>{displayBalance != null ? maskBalance(valEur) : '–'} €</div>
+            </div>
+            <div className="flex items-center gap-0 opacity-0 group-hover:opacity-100 transition-all">
+              {wallet.address && (
+                <>
+                  <button onClick={handleQuickCopy} title="Copier l'adresse"
+                    className={`p-1 rounded transition-all duration-300 ${isCopied ? 'text-green-400 scale-110' : `${T.textFaint} hover:text-amber-500`}`}>
+                    {isCopied ? <SaveIcon size={12} check /> : <CopyIcon size={12} />}
+                  </button>
+                  <button onClick={(e) => { e.stopPropagation(); setQrOverlay({ address: wallet.address, name: wallet.name }); }} title="QR Code"
+                    className={`p-1 rounded ${T.textFaint} hover:text-amber-500 transition-colors`}>
+                    <QRCodeIcon size={12} />
+                  </button>
+                </>
+              )}
+              <button onClick={(e) => { e.stopPropagation(); openMoneroSetup(wallet); }} title={moneroInfo ? "Modifier la config RPC" : "Configurer le noeud RPC"}
+                className={`p-1 rounded ${moneroInfo ? 'text-green-400 hover:text-green-300' : 'text-purple-400 hover:text-purple-300'} transition-colors`}>
                 <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="23 4 23 10 17 10"/><polyline points="20 20 14 20 14 14"/><path d="M14 14 20 20"/><path d="M3 4 9 4 9 10"/><path d="M6 20 2 20 2 14"/><path d="M2 14 6 20"/>
+                  <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/>
                 </svg>
               </button>
-            )}
-            <button onClick={async (e) => { e.stopPropagation(); if (await showConfirm(`Supprimer "${wallet.name}" ?`)) deleteWallet(wallet.id); }}
-              className={`${T.textFaint} hover:text-red-400 transition-all p-1`}>
-              <TrashIcon />
-            </button>
+              {moneroInfo && (
+                <button onClick={(e) => { e.stopPropagation(); fetchMoneroBalance(wallet); }} title="Mettre à jour la balance via RPC"
+                  className={`p-1 rounded ${loading[wallet.id] ? 'text-amber-500 animate-pulse' : `${T.textFaint} hover:text-amber-500`} transition-colors`}>
+                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="23 4 23 10 17 10"/><polyline points="20 20 14 20 14 14"/><path d="M14 14 20 20"/><path d="M3 4 9 4 9 10"/><path d="M6 20 2 20 2 14"/><path d="M2 14 6 20"/>
+                  </svg>
+                </button>
+              )}
+              <button onClick={async (e) => { e.stopPropagation(); if (await showConfirm(`Supprimer "${wallet.name}" ?`)) deleteWallet(wallet.id); }}
+                className={`${T.textFaint} hover:text-red-400 transition-all p-1`}>
+                <TrashIcon />
+              </button>
+            </div>
           </div>
         </div>
+        {/* Banner: configure RPC when no keys set */}
+        {!moneroInfo && (
+          <button onClick={() => openMoneroSetup(wallet)}
+            className={`w-full px-3 py-1.5 border ${T.rowBorder} border-t-0 rounded-b-lg text-xs ${T.textFaint} hover:text-purple-400 transition-colors flex items-center justify-center gap-1.5 bg-purple-500/5 hover:bg-purple-500/10`}>
+            <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
+            </svg>
+            Configurer un noeud RPC Monero (local ou distant)
+          </button>
+        )}
       </div>
     );
   };
@@ -3013,26 +3025,36 @@ const App = () => {
                 </p>
               </div>
               
-              {/* Node Selection */}
+              {/* Node Selection — free input with suggestions */}
               <div>
-                <label className={`block text-xs font-medium ${T.textMuted} mb-1`}>Nœud Monero</label>
-                <select
-                  className={`w-full px-3 py-2.5 ${T.inputBg} border ${T.inputBorder} rounded-lg text-sm`}
+                <label className={`block text-xs font-medium ${T.textMuted} mb-1`}>Noeud Monero (daemon ou wallet-rpc)</label>
+                <input
+                  type="text"
+                  list="monero-node-suggestions"
+                  placeholder="http://127.0.0.1:18081"
+                  className={`w-full px-3 py-2.5 ${T.inputBg} border ${T.inputBorder} rounded-lg text-sm focus:outline-none focus:border-amber-500/50 font-mono`}
                   id="monero-node-select"
-                  defaultValue={getMoneroDefaultNodes()[0]}
-                >
+                  defaultValue={currentMoneroWallet?.nodeUrl || getMoneroDefaultNodes()[0]}
+                  onKeyDown={(e) => { if (e.key === 'Enter') document.getElementById('monero-test-btn')?.click(); }}
+                />
+                <datalist id="monero-node-suggestions">
+                  <option value="http://127.0.0.1:18081">localhost (daemon)</option>
+                  <option value="http://127.0.0.1:18082">localhost (wallet-rpc)</option>
                   {getMoneroDefaultNodes().map((node, index) => (
-                    <option key={index} value={node}>{node.replace('http://', '')}</option>
+                    <option key={index} value={node}>{node}</option>
                   ))}
-                </select>
-                <div className="flex items-center gap-2 mt-2">
-                  {moneroNodeStatus[getMoneroDefaultNodes()[0]]?.success ? (
-                    <span className="text-green-500 text-xs">✓ Nœud accessible</span>
-                  ) : moneroNodeStatus[getMoneroDefaultNodes()[0]]?.error ? (
-                    <span className="text-red-500 text-xs">✗ {moneroNodeStatus[getMoneroDefaultNodes()[0]].error}</span>
-                  ) : (
-                    <span className={`text-xs ${T.textFaint}`}>Test en cours...</span>
-                  )}
+                </datalist>
+                <p className={`text-xs ${T.textFaint} mt-1`}>
+                  Noeud local recommande (ex: 127.0.0.1:18081) ou distant
+                </p>
+                <div className="flex items-center gap-2 mt-1">
+                  {(() => {
+                    const nodeVal = currentMoneroWallet?.nodeUrl || getMoneroDefaultNodes()[0];
+                    const status = moneroNodeStatus[nodeVal];
+                    if (status?.success) return <span className="text-green-500 text-xs">Noeud accessible (hauteur {status.height})</span>;
+                    if (status?.error) return <span className="text-red-500 text-xs">{status.error}</span>;
+                    return <span className={`text-xs ${T.textFaint}`}>Cliquez "Tester" pour verifier</span>;
+                  })()}
                 </div>
               </div>
               
