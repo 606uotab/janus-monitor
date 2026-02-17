@@ -162,6 +162,12 @@ pub struct Wallet {
     pub name: String,
     pub address: String,
     pub balance: Option<f64>,
+    #[serde(rename = "viewKey")]
+    pub view_key: Option<String>,
+    #[serde(rename = "spendKey")]
+    pub spend_key: Option<String>,
+    #[serde(rename = "nodeUrl")]
+    pub node_url: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -573,8 +579,14 @@ async fn fetch_blockchair_history(
     asset: &str,
     limit: usize,
 ) -> Result<Vec<HistoryTx>, String> {
+    // Normalize BCH CashAddr: add bitcoincash: prefix if missing
+    let norm_addr = if asset == "bch" && (address.starts_with('q') || address.starts_with('p')) && !address.contains(':') {
+        format!("bitcoincash:{}", address)
+    } else {
+        address.to_string()
+    };
     let url = format!(
-        "https://api.blockchair.com/{}/dashboards/address/{}?transaction_details=true&limit={}", chain, address, limit
+        "https://api.blockchair.com/{}/dashboards/address/{}?transaction_details=true&limit={}", chain, norm_addr, limit
     );
     let resp: serde_json::Value = client.get(&url).send().await.map_err(|e| e.to_string())?
         .json().await.map_err(|e| e.to_string())?;
@@ -1852,6 +1864,20 @@ fn init_db(conn: &Connection) -> Result<(), rusqlite::Error> {
         eprintln!("[MIGRATION V1→V2] Migration terminée !");
     }
 
+    // ── Migration V2→V3: Add privacy coin fields (view_key, spend_key, node_url) ──
+    let has_view_key: bool = conn
+        .prepare("SELECT COUNT(*) FROM pragma_table_info('wallets') WHERE name='view_key'")?
+        .query_row([], |row| row.get::<_, i64>(0))
+        .map(|count| count > 0)
+        .unwrap_or(false);
+
+    if !has_view_key {
+        conn.execute("ALTER TABLE wallets ADD COLUMN view_key TEXT", [])?;
+        conn.execute("ALTER TABLE wallets ADD COLUMN spend_key TEXT", [])?;
+        conn.execute("ALTER TABLE wallets ADD COLUMN node_url TEXT", [])?;
+        eprintln!("[MIGRATION V2→V3] Colonnes privacy coin ajoutées (view_key, spend_key, node_url)");
+    }
+
     let wallet_count: i64 = conn.query_row("SELECT COUNT(*) FROM wallets", [], |row| row.get(0))?;
     let cat_count: i64 = conn.query_row("SELECT COUNT(*) FROM categories", [], |row| row.get(0)).unwrap_or(0);
 
@@ -2004,7 +2030,7 @@ fn reorder_categories(state: State<DbState>, category_ids: Vec<i64>) -> Result<(
 fn get_wallets(state: State<DbState>) -> Result<Vec<Wallet>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     let mut stmt = conn
-        .prepare("SELECT id, category_id, asset, name, address, balance FROM wallets ORDER BY id")
+        .prepare("SELECT id, category_id, asset, name, address, balance, view_key, spend_key, node_url FROM wallets ORDER BY id")
         .map_err(|e| e.to_string())?;
     let wallets = stmt
         .query_map([], |row| {
@@ -2015,6 +2041,9 @@ fn get_wallets(state: State<DbState>) -> Result<Vec<Wallet>, String> {
                 name: row.get(3)?,
                 address: row.get(4)?,
                 balance: row.get(5)?,
+                view_key: row.get(6)?,
+                spend_key: row.get(7)?,
+                node_url: row.get(8)?,
             })
         })
         .map_err(|e| e.to_string())?
@@ -2024,14 +2053,14 @@ fn get_wallets(state: State<DbState>) -> Result<Vec<Wallet>, String> {
 }
 
 #[tauri::command]
-fn update_wallet(state: State<DbState>, id: i64, name: String, address: String, balance: Option<f64>) -> Result<(), String> {
+fn update_wallet(state: State<DbState>, id: i64, name: String, address: String, balance: Option<f64>, view_key: Option<String>, spend_key: Option<String>, node_url: Option<String>) -> Result<(), String> {
     input_validation::validate_wallet_name(&name)?;
     input_validation::validate_balance(balance)?;
     if let Some(b) = balance { log_balance("UPDATE_WALLET", b); }
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     conn.execute(
-        "UPDATE wallets SET name = ?1, address = ?2, balance = ?3, updated_at = CURRENT_TIMESTAMP WHERE id = ?4",
-        params![name, address, balance, id],
+        "UPDATE wallets SET name = ?1, address = ?2, balance = ?3, view_key = COALESCE(?4, view_key), spend_key = COALESCE(?5, spend_key), node_url = COALESCE(?6, node_url), updated_at = CURRENT_TIMESTAMP WHERE id = ?7",
+        params![name, address, balance, view_key, spend_key, node_url, id],
     ).map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -2603,8 +2632,14 @@ async fn fetch_balance(state: State<'_, DbState>, asset: String, address: String
 
         // ── BCH via multiple APIs (legacy & cashaddr support) ──
         "bch" => {
-            // Try Blockchair first (supports both legacy and cashaddr)
-            let url = format!("https://api.blockchair.com/bitcoin-cash/dashboards/address/{}", address);
+            // Normalize CashAddr: add bitcoincash: prefix if missing
+            let bch_addr = if (address.starts_with('q') || address.starts_with('p')) && !address.contains(':') {
+                format!("bitcoincash:{}", address)
+            } else {
+                address.to_string()
+            };
+            // Try Blockchair first (requires full cashaddr with prefix)
+            let url = format!("https://api.blockchair.com/bitcoin-cash/dashboards/address/{}", bch_addr);
             if let Ok(response) = client.get(&url).send().await {
                 if response.status().is_success() {
                     if let Ok(raw) = response.json::<serde_json::Value>().await {
@@ -2625,7 +2660,7 @@ async fn fetch_balance(state: State<'_, DbState>, asset: String, address: String
             }
 
             // Fallback: bitcoin.com REST API (supports legacy addresses)
-            let url2 = format!("https://rest1.biggestfan.net/v2/address/details/{}", address);
+            let url2 = format!("https://rest1.biggestfan.net/v2/address/details/{}", bch_addr);
             if let Ok(resp2) = client.get(&url2).send().await {
                 if resp2.status().is_success() {
                     if let Ok(data) = resp2.json::<serde_json::Value>().await {
@@ -2637,7 +2672,7 @@ async fn fetch_balance(state: State<'_, DbState>, asset: String, address: String
             }
 
             // Fallback: Blockcypher
-            let url3 = format!("https://api.blockcypher.com/v1/bch/main/addrs/{}/balance", address);
+            let url3 = format!("https://api.blockcypher.com/v1/bch/main/addrs/{}/balance", bch_addr);
             if let Ok(resp3) = client.get(&url3).send().await {
                 if resp3.status().is_success() {
                     if let Ok(data) = resp3.json::<BlockcypherAddress>().await {
@@ -2905,8 +2940,8 @@ async fn fetch_balance(state: State<'_, DbState>, asset: String, address: String
             Err(format!("Balance {} non trouvée", asset.to_uppercase()))
         }
 
-        // ── Manual entry ──
-        "xmr" => Err("Monero: saisie manuelle requise (blockchain privée)".to_string()),
+        // ── Monero: manual entry (privacy blockchain — no public API) ──
+        "xmr" => Err("Monero : saisie manuelle ou nœud wallet-rpc requis (blockchain privée)".to_string()),
 
         // ── DOT via multiple APIs (balances migrated to Asset Hub Nov 2025) ──
         "dot" => {
@@ -3424,7 +3459,7 @@ fn save_profile(state: State<DbState>, session_key: State<SessionKeyState>, name
         .map_err(|e| e.to_string())?;
     
     let mut wallet_stmt = conn
-        .prepare("SELECT id, category_id, asset, name, address, balance FROM wallets ORDER BY id")
+        .prepare("SELECT id, category_id, asset, name, address, balance, view_key, spend_key, node_url FROM wallets ORDER BY id")
         .map_err(|e| e.to_string())?;
     let wallets: Vec<Wallet> = wallet_stmt
         .query_map([], |row| {
@@ -3435,6 +3470,9 @@ fn save_profile(state: State<DbState>, session_key: State<SessionKeyState>, name
                 name: row.get(3)?,
                 address: row.get(4)?,
                 balance: row.get(5)?,
+                view_key: row.get(6)?,
+                spend_key: row.get(7)?,
+                node_url: row.get(8)?,
             })
         })
         .map_err(|e| e.to_string())?
@@ -3447,6 +3485,12 @@ fn save_profile(state: State<DbState>, session_key: State<SessionKeyState>, name
         let mut encrypted_wallets = wallets;
         for w in &mut encrypted_wallets {
             w.address = encrypt_string_with_key(&w.address, key_bytes)?;
+            if let Some(ref vk) = w.view_key {
+                w.view_key = Some(encrypt_string_with_key(vk, key_bytes)?);
+            }
+            if let Some(ref sk) = w.spend_key {
+                w.spend_key = Some(encrypt_string_with_key(sk, key_bytes)?);
+            }
         }
         (encrypted_wallets, true)
     } else {
@@ -3482,6 +3526,14 @@ fn load_profile(state: State<DbState>, session_key: State<SessionKeyState>, name
                 for w in &mut data.wallets {
                     w.address = decrypt_string_with_key(&w.address, key_bytes)
                         .unwrap_or_else(|_| w.address.clone());
+                    if let Some(ref vk) = w.view_key {
+                        w.view_key = Some(decrypt_string_with_key(vk, key_bytes)
+                            .unwrap_or_else(|_| vk.clone()));
+                    }
+                    if let Some(ref sk) = w.spend_key {
+                        w.spend_key = Some(decrypt_string_with_key(sk, key_bytes)
+                            .unwrap_or_else(|_| sk.clone()));
+                    }
                 }
             } else {
                 return Err("Profil chiffré — déverrouillez d'abord avec votre PIN".to_string());
@@ -3499,8 +3551,8 @@ fn load_profile(state: State<DbState>, session_key: State<SessionKeyState>, name
         conn.execute("DELETE FROM wallets", []).map_err(|e| e.to_string())?;
         for w in data.wallets {
             conn.execute(
-                "INSERT INTO wallets (category_id, asset, name, address, balance) VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![w.category_id, w.asset, w.name, w.address, w.balance],
+                "INSERT INTO wallets (category_id, asset, name, address, balance, view_key, spend_key, node_url) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![w.category_id, w.asset, w.name, w.address, w.balance, w.view_key, w.spend_key, w.node_url],
             ).map_err(|e| e.to_string())?;
         }
 
@@ -3514,6 +3566,32 @@ fn load_profile(state: State<DbState>, session_key: State<SessionKeyState>, name
 fn delete_profile(name: String) -> Result<(), String> {
     let path = get_profiles_dir().join(format!("{}.json", name));
     std::fs::remove_file(path).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn export_profile(name: String) -> Result<String, String> {
+    let path = get_profiles_dir().join(format!("{}.json", name));
+    if !path.exists() {
+        return Err(format!("Profil '{}' introuvable", name));
+    }
+    std::fs::read_to_string(&path).map_err(|e| format!("Erreur de lecture: {}", e))
+}
+
+#[tauri::command]
+fn import_profile(name: String, content: String) -> Result<(), String> {
+    input_validation::validate_profile_name(&name)?;
+    // Validate JSON structure
+    let _data: ProfileData = serde_json::from_str(&content)
+        .map_err(|e| format!("JSON invalide: {}", e))?;
+    let path = get_profiles_dir().join(format!("{}.json", name));
+    std::fs::write(&path, &content)
+        .map_err(|e| format!("Erreur d'écriture: {}", e))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    }
     Ok(())
 }
 
@@ -3781,6 +3859,8 @@ pub fn run() {
             save_profile,
             load_profile,
             delete_profile,
+            export_profile,
+            import_profile,
             reset_wallets,
             open_url,
             get_pending_transactions,        // ✨ NOUVEAU

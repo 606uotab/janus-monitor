@@ -7,7 +7,11 @@ const validateBackendResponse = (response, expectedType, expectedFields = []) =>
   }
 
   // Vérification du type
-  if (expectedType && typeof response !== expectedType) {
+  if (expectedType === 'array') {
+    if (!Array.isArray(response)) {
+      throw new Error(`Type de réponse inattendu. Attendu: array, Reçu: ${typeof response}`);
+    }
+  } else if (expectedType && typeof response !== expectedType) {
     throw new Error(`Type de réponse inattendu. Attendu: ${expectedType}, Reçu: ${typeof response}`);
   }
 

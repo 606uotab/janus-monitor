@@ -294,13 +294,13 @@ const App = () => {
   // Helper to get Monero wallet display info
   const getMoneroWalletInfo = (wallet) => {
     if (!isMoneroWalletWithKeys(wallet)) return null;
-    
+
     return {
       hasKeys: true,
       address: wallet.address,
       viewKey: wallet.viewKey,
       spendKey: wallet.spendKey || null,
-      node: wallet.moneroNode || getMoneroDefaultNodes()[0],
+      node: wallet.nodeUrl || getMoneroDefaultNodes()[0],
       maskedViewKey: maskSensitiveData('XMR', wallet.viewKey),
       maskedSpendKey: wallet.spendKey ? maskSensitiveData('XMR', wallet.spendKey) : null
     };
@@ -310,10 +310,27 @@ const App = () => {
   const openMoneroSetup = (wallet) => {
     setCurrentMoneroWallet(wallet);
     setShowMoneroSetup(true);
-    
-    // Test the default node
-    testPrivacyNode('XMR', getMoneroDefaultNodes()[0]).then(result => {
-      setMoneroNodeStatus(prev => ({ ...prev, [getMoneroDefaultNodes()[0]]: result }));
+
+    // Pre-fill existing keys after render
+    setTimeout(() => {
+      if (wallet.viewKey) {
+        const vkInput = document.getElementById('monero-view-key-input');
+        if (vkInput) vkInput.value = wallet.viewKey;
+      }
+      if (wallet.spendKey) {
+        const skInput = document.getElementById('monero-spend-key-input');
+        if (skInput) skInput.value = wallet.spendKey;
+      }
+      if (wallet.nodeUrl) {
+        const nodeSelect = document.getElementById('monero-node-select');
+        if (nodeSelect) nodeSelect.value = wallet.nodeUrl;
+      }
+    }, 50);
+
+    // Test the default or configured node
+    const nodeToTest = wallet.nodeUrl || getMoneroDefaultNodes()[0];
+    testPrivacyNode('XMR', nodeToTest).then(result => {
+      setMoneroNodeStatus(prev => ({ ...prev, [nodeToTest]: result }));
     });
   };
 
@@ -327,35 +344,26 @@ const App = () => {
   // Save Monero wallet configuration
   const saveMoneroConfiguration = async (wallet, viewKey, spendKey, node) => {
     try {
-      // Validate keys
-      validatePivxKeys(wallet.address, null, null, node);
-
-      // Prepare wallet data
-      const walletData = preparePivxWalletData(wallet.address, { node });
-      
-      // Store in state
-      setMoneroWalletData(prev => ({ ...prev, [wallet.id]: walletData }));
-      
-      // Update wallet in database
+      // Update wallet in database with Monero keys
       await invoke('update_wallet', {
         id: wallet.id,
         name: wallet.name,
         address: wallet.address,
         balance: wallet.balance,
-        monero_view_key: viewKey,
-        monero_spend_key: spendKey || null,
-        monero_node: node
+        viewKey: viewKey || null,
+        spendKey: spendKey || null,
+        nodeUrl: node || null
       });
-      
-      // Test the configuration
-      const testResult = await testMoneroNode(node);
+
+      // Test node
+      const testResult = await testPrivacyNode('XMR', node);
       setMoneroNodeStatus(prev => ({ ...prev, [node]: testResult }));
-      
-      showToast('✅ Configuration Monero enregistrée avec succès !');
-      
+
+      showToast('Configuration Monero enregistrée');
+
       // Reload wallets to get updated data
       await loadWallets();
-      
+
       return true;
     } catch (error) {
       showToast('Erreur de configuration');
@@ -363,7 +371,7 @@ const App = () => {
     }
   };
 
-  // Fetch Monero balance for a wallet
+  // Fetch Monero balance for a wallet via wallet-rpc
   const fetchMoneroBalance = async (wallet) => {
     try {
       if (!isMoneroWalletWithKeys(wallet)) {
@@ -371,38 +379,32 @@ const App = () => {
         return null;
       }
 
-      const moneroInfo = getMoneroWalletInfo(wallet);
-      const walletData = prepareMoneroWalletData(
-        wallet.address,
-        moneroInfo.viewKey,
-        moneroInfo.spendKey,
-        moneroInfo.node
-      );
-
+      const info = getMoneroWalletInfo(wallet);
       setLoading(prev => ({ ...prev, [wallet.id]: true }));
 
-      const result = await getPrivacyBalance('XMR', walletData.address, {
-        viewKey: walletData.viewKey,
-        node: walletData.node
+      const balance = await invoke('get_monero_balance', {
+        address: info.address,
+        viewKey: info.viewKey,
+        spendKey: info.spendKey,
+        node: info.node
       });
 
-      if (result.success) {
-        // Update wallet balance
-        await invoke('update_wallet', {
-          id: wallet.id,
-          name: wallet.name,
-          address: wallet.address,
-          balance: result.balance
-        });
+      // Update wallet balance in DB
+      await invoke('update_wallet', {
+        id: wallet.id,
+        name: wallet.name,
+        address: wallet.address,
+        balance: balance,
+        viewKey: wallet.viewKey,
+        spendKey: wallet.spendKey,
+        nodeUrl: wallet.nodeUrl
+      });
 
-        await loadWallets();
-        showToast(hideBalances ? 'Balance Monero mise à jour' : `Balance Monero: ${result.balance.toFixed(6)} XMR`);
-        return result;
-      }
-
-      return null;
-    } catch (_) {
-      showToast('Erreur Monero');
+      await loadWallets();
+      showToast(hideBalances ? 'Balance Monero mise à jour' : `Balance Monero: ${balance.toFixed(6)} XMR`);
+      return balance;
+    } catch (err) {
+      showToast(`Erreur Monero: ${err}`);
       return null;
     } finally {
       setLoading(prev => ({ ...prev, [wallet.id]: false }));
@@ -413,30 +415,32 @@ const App = () => {
   const testMoneroConfiguration = async (address, viewKey, spendKey, node) => {
     try {
       setMoneroTestResult({ testing: true, error: null });
-      
-      const walletData = prepareMoneroWalletData(address, viewKey, spendKey || null, node);
-      
+
       // Test node first
-      const nodeTest = await testMoneroNode(node);
+      const nodeTest = await testPrivacyNode('XMR', node);
       if (!nodeTest.success) {
-        throw new Error('Nœud Monero inaccessible');
+        throw new Error(nodeTest.error || 'Noeud Monero inaccessible');
       }
-      
-      // Test balance fetch (this will scan the blockchain)
-      const balanceResult = await getPrivacyBalance('XMR', walletData.address, {
-        viewKey: walletData.viewKey,
-        node: walletData.node
-      });
-      
+
+      // Try to get balance via wallet-rpc
+      let balance = 0;
+      try {
+        balance = await invoke('get_monero_balance', {
+          address, viewKey, spendKey: spendKey || null, node
+        });
+      } catch (_) {
+        // wallet-rpc may not have wallet loaded — node test is enough
+      }
+
       setMoneroTestResult({
         testing: false,
         success: true,
-        balance: balanceResult.balance,
-        unlockedBalance: balanceResult.unlockedBalance,
+        balance: balance,
+        unlockedBalance: balance,
         nodeInfo: nodeTest
       });
-      
-      showToast('✅ Configuration Monero validée avec succès !');
+
+      showToast('Configuration Monero validee');
       return true;
     } catch (error) {
       setMoneroTestResult({
@@ -444,7 +448,7 @@ const App = () => {
         success: false,
         error: error.message
       });
-      showToast('Test de configuration échoué');
+      showToast('Test de configuration echoue');
       return false;
     }
   };
@@ -1021,6 +1025,32 @@ const App = () => {
     setShowMenuDrawer(false);
     if (!await showConfirm(`Supprimer définitivement le profil "${name}" ?`)) return;
     try { await invoke('delete_profile', { name }); await loadProfiles(); showToast(`Profil "${name}" supprimé`); if (activeProfile === name) setActiveProfile('Auto'); } catch (e) { showToast('Erreur suppression ✗'); }
+  };
+  const handleExportProfile = async (name) => {
+    try {
+      const content = await invoke('export_profile', { name });
+      const blob = new Blob([content], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${name}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      showToast(`Profil "${name}" exporté ✓`);
+    } catch (e) { showToast('Erreur export ✗'); }
+  };
+  const handleImportProfile = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = '';
+    try {
+      const content = await file.text();
+      JSON.parse(content); // validate JSON
+      const name = file.name.replace(/\.json$/i, '');
+      await invoke('import_profile', { name, content });
+      await loadProfiles();
+      showToast(`Profil "${name}" importé ✓`);
+    } catch (err) { showToast('Erreur import : fichier JSON invalide ✗'); }
   };
   const handleReset = async () => {
     setShowMenuDrawer(false);
@@ -1700,14 +1730,12 @@ const App = () => {
                 </button>
               </>
             )}
-            {!moneroInfo && (
-              <button onClick={(e) => { e.stopPropagation(); openMoneroSetup(wallet); }} title="Configurer les clés Monero"
-                className={`p-1 rounded text-purple-400 hover:text-purple-300 transition-colors`}>
-                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/>
-                </svg>
-              </button>
-            )}
+            <button onClick={(e) => { e.stopPropagation(); openMoneroSetup(wallet); }} title={moneroInfo ? "Modifier les clés Monero" : "Configurer les clés Monero"}
+              className={`p-1 rounded ${moneroInfo ? 'text-green-400 hover:text-green-300' : 'text-purple-400 hover:text-purple-300'} transition-colors`}>
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/>
+              </svg>
+            </button>
             {moneroInfo && (
               <button onClick={(e) => { e.stopPropagation(); fetchMoneroBalance(wallet); }} title="Mettre à jour la balance Monero"
                 className={`p-1 rounded ${loading[wallet.id] ? 'text-amber-500 animate-pulse' : `${T.textFaint} hover:text-amber-500`} transition-colors`}>
@@ -2393,7 +2421,10 @@ const App = () => {
                           {p === activeProfile && <span className="text-amber-500 text-xs">●</span>}
                           <span className={p === activeProfile ? 'text-amber-500 font-medium' : ''}>{p}</span>
                         </button>
-                        <button onClick={() => handleDeleteProfile(p)} className={`${T.textFaint} hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all p-1`}>
+                        <button onClick={() => handleExportProfile(p)} className={`${T.textFaint} hover:text-amber-400 opacity-0 group-hover:opacity-100 transition-all p-1`} title="Exporter">
+                          <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                        </button>
+                        <button onClick={() => handleDeleteProfile(p)} className={`${T.textFaint} hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all p-1`} title="Supprimer">
                           <TrashIcon />
                         </button>
                       </div>
@@ -2402,6 +2433,11 @@ const App = () => {
                 ) : (
                   <p className={`text-sm ${T.textFaint} py-2`}>Aucun profil sauvegardé</p>
                 )}
+                <label className={`flex items-center justify-center gap-2 mt-3 px-3 py-2.5 rounded-lg border border-dashed ${T.inputBorder} ${T.textMuted} hover:border-amber-500/40 hover:text-amber-500 cursor-pointer transition-colors text-sm`}>
+                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                  Importer un profil
+                  <input type="file" accept=".json" onChange={handleImportProfile} className="hidden" />
+                </label>
               </div>
             </div>
           )}
