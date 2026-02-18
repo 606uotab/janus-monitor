@@ -3025,29 +3025,55 @@ const App = () => {
                 </p>
               </div>
               
-              {/* Node Selection — free input with suggestions */}
+              {/* Node Selection — select with presets + custom input */}
               <div>
-                <label className={`block text-xs font-medium ${T.textMuted} mb-1`}>Noeud Monero (daemon ou wallet-rpc)</label>
+                <label className={`block text-xs font-medium ${T.textMuted} mb-1`}>Noeud Monero</label>
+                <select
+                  className={`w-full px-3 py-2.5 ${T.inputBg} border ${T.inputBorder} rounded-lg text-sm`}
+                  id="monero-node-select"
+                  defaultValue={(() => {
+                    const saved = currentMoneroWallet?.nodeUrl;
+                    if (!saved) return getMoneroDefaultNodes()[0];
+                    const allPresets = ['http://127.0.0.1:18081', 'http://127.0.0.1:18082', ...getMoneroDefaultNodes()];
+                    return allPresets.includes(saved) ? saved : '__custom__';
+                  })()}
+                  onChange={(e) => {
+                    const customInput = document.getElementById('monero-node-custom');
+                    if (e.target.value === '__custom__') {
+                      customInput.style.display = 'block';
+                      customInput.focus();
+                    } else {
+                      customInput.style.display = 'none';
+                    }
+                  }}
+                >
+                  <option value="http://127.0.0.1:18081">localhost:18081 (daemon local)</option>
+                  <option value="http://127.0.0.1:18082">localhost:18082 (wallet-rpc local)</option>
+                  {getMoneroDefaultNodes().map((node, index) => (
+                    <option key={index} value={node}>{node.replace('http://', '')}</option>
+                  ))}
+                  <option value="__custom__">Noeud custom...</option>
+                </select>
                 <input
                   type="text"
-                  list="monero-node-suggestions"
-                  placeholder="http://127.0.0.1:18081"
-                  className={`w-full px-3 py-2.5 ${T.inputBg} border ${T.inputBorder} rounded-lg text-sm focus:outline-none focus:border-amber-500/50 font-mono`}
-                  id="monero-node-select"
-                  defaultValue={currentMoneroWallet?.nodeUrl || getMoneroDefaultNodes()[0]}
+                  id="monero-node-custom"
+                  placeholder="http://mon-noeud:18081"
+                  className={`w-full mt-2 px-3 py-2.5 ${T.inputBg} border ${T.inputBorder} rounded-lg text-sm font-mono focus:outline-none focus:border-amber-500/50`}
+                  style={{ display: (() => {
+                    const saved = currentMoneroWallet?.nodeUrl;
+                    if (!saved) return 'none';
+                    const allPresets = ['http://127.0.0.1:18081', 'http://127.0.0.1:18082', ...getMoneroDefaultNodes()];
+                    return allPresets.includes(saved) ? 'none' : 'block';
+                  })() }}
+                  defaultValue={(() => {
+                    const saved = currentMoneroWallet?.nodeUrl;
+                    if (!saved) return '';
+                    const allPresets = ['http://127.0.0.1:18081', 'http://127.0.0.1:18082', ...getMoneroDefaultNodes()];
+                    return allPresets.includes(saved) ? '' : saved;
+                  })()}
                   onKeyDown={(e) => { if (e.key === 'Enter') document.getElementById('monero-test-btn')?.click(); }}
                 />
-                <datalist id="monero-node-suggestions">
-                  <option value="http://127.0.0.1:18081">localhost (daemon)</option>
-                  <option value="http://127.0.0.1:18082">localhost (wallet-rpc)</option>
-                  {getMoneroDefaultNodes().map((node, index) => (
-                    <option key={index} value={node}>{node}</option>
-                  ))}
-                </datalist>
-                <p className={`text-xs ${T.textFaint} mt-1`}>
-                  Noeud local recommande (ex: 127.0.0.1:18081) ou distant
-                </p>
-                <div className="flex items-center gap-2 mt-1">
+                <div className="flex items-center gap-2 mt-2">
                   {(() => {
                     const nodeVal = currentMoneroWallet?.nodeUrl || getMoneroDefaultNodes()[0];
                     const status = moneroNodeStatus[nodeVal];
@@ -3098,35 +3124,37 @@ const App = () => {
                   onClick={async () => {
                     const viewKey = document.getElementById('monero-view-key-input').value;
                     const spendKey = document.getElementById('monero-spend-key-input').value || null;
-                    const node = document.getElementById('monero-node-select').value;
-                    
+                    const selectVal = document.getElementById('monero-node-select').value;
+                    const node = selectVal === '__custom__' ? document.getElementById('monero-node-custom').value : selectVal;
+
                     await testMoneroConfiguration(currentMoneroWallet.address, viewKey, spendKey, node);
                   }}
                   className="flex-1 px-4 py-2.5 bg-amber-500 text-zinc-900 rounded-lg text-sm font-medium hover:bg-amber-400 transition-colors"
                 >
-                  🔍 Tester la Configuration
+                  Tester
                 </button>
-                
+
                 <button
                   onClick={async () => {
                     const viewKey = document.getElementById('monero-view-key-input').value;
                     const spendKey = document.getElementById('monero-spend-key-input').value || null;
-                    const node = document.getElementById('monero-node-select').value;
-                    
+                    const selectVal = document.getElementById('monero-node-select').value;
+                    const node = selectVal === '__custom__' ? document.getElementById('monero-node-custom').value : selectVal;
+
                     const success = await saveMoneroConfiguration(
-                      currentMoneroWallet, 
-                      viewKey, 
-                      spendKey, 
+                      currentMoneroWallet,
+                      viewKey,
+                      spendKey,
                       node
                     );
-                    
+
                     if (success) {
                       closeMoneroSetup();
                     }
                   }}
                   className="flex-1 px-4 py-2.5 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-500 transition-colors"
                 >
-                  ✅ Enregistrer
+                  Enregistrer
                 </button>
               </div>
               
