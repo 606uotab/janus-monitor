@@ -2975,10 +2975,10 @@ const App = () => {
       {/* 🔒 Monero Setup Overlay - Extended Key Configuration */}
       {showMoneroSetup && currentMoneroWallet && (
         <div className="fixed inset-0 z-[100] bg-black/75 flex items-center justify-center p-4" onClick={(e) => { if (e.target === e.currentTarget) closeMoneroSetup(); }}>
-          <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 w-full max-w-md mx-auto shadow-2xl" onClick={(e) => e.stopPropagation()}>
+          <div className={`${T.bg} border ${T.border} rounded-xl p-6 w-full max-w-md mx-auto shadow-2xl`} onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-semibold text-zinc-100">🔑 Configuration Monero</h3>
-              <button onClick={closeMoneroSetup} className="text-zinc-500 hover:text-amber-500 text-xl transition-colors">✕</button>
+              <h3 className={`text-lg font-semibold ${T.text}`}>Configuration Monero</h3>
+              <button onClick={closeMoneroSetup} className={`${T.textFaint} hover:text-amber-500 text-xl transition-colors`}>✕</button>
             </div>
             
             <p className={`text-sm ${T.textMuted} mb-6`}>
@@ -2987,9 +2987,9 @@ const App = () => {
             
             <div className="space-y-4">
               {/* Wallet Info */}
-              <div className="p-3 bg-zinc-800/50 rounded-lg border border-zinc-700">
-                <div className="text-xs text-zinc-400 mb-1">Wallet Monero</div>
-                <div className="font-medium text-zinc-100">{currentMoneroWallet.name}</div>
+              <div className={`p-3 ${T.inputBg} rounded-lg border ${T.inputBorder}`}>
+                <div className={`text-xs ${T.textMuted} mb-1`}>Wallet Monero</div>
+                <div className={`font-medium ${T.text}`}>{currentMoneroWallet.name}</div>
                 <div className={`text-xs font-mono ${T.textFaint} mt-1`}>
                   {maskAddress(currentMoneroWallet.address)}
                 </div>
@@ -3001,7 +3001,7 @@ const App = () => {
                 <input
                   type="password"
                   placeholder="64 caractères hexadécimaux..."
-                  className={`w-full px-3 py-2.5 ${T.inputBg} border ${T.inputBorder} rounded-lg text-sm focus:outline-none focus:border-amber-500/50`}
+                  className={`w-full px-3 py-2.5 ${T.inputBg} border ${T.inputBorder} rounded-lg text-sm ${T.text} focus:outline-none focus:border-amber-500/50`}
                   id="monero-view-key-input"
                   onKeyDown={(e) => { if (e.key === 'Enter') document.getElementById('monero-test-btn')?.click(); }}
                 />
@@ -3016,7 +3016,7 @@ const App = () => {
                 <input
                   type="password"
                   placeholder="64 caractères hexadécimaux (optionnel)..."
-                  className={`w-full px-3 py-2.5 ${T.inputBg} border ${T.inputBorder} rounded-lg text-sm focus:outline-none focus:border-amber-500/50`}
+                  className={`w-full px-3 py-2.5 ${T.inputBg} border ${T.inputBorder} rounded-lg text-sm ${T.text} focus:outline-none focus:border-amber-500/50`}
                   id="monero-spend-key-input"
                   onKeyDown={(e) => { if (e.key === 'Enter') document.getElementById('monero-test-btn')?.click(); }}
                 />
@@ -3028,51 +3028,46 @@ const App = () => {
               {/* Node Selection — select with presets + custom input */}
               <div>
                 <label className={`block text-xs font-medium ${T.textMuted} mb-1`}>Noeud Monero</label>
-                <select
-                  className={`w-full px-3 py-2.5 ${T.inputBg} border ${T.inputBorder} rounded-lg text-sm`}
-                  id="monero-node-select"
-                  defaultValue={(() => {
-                    const saved = currentMoneroWallet?.nodeUrl;
-                    if (!saved) return getMoneroDefaultNodes()[0];
-                    const allPresets = ['http://127.0.0.1:18081', 'http://127.0.0.1:18082', ...getMoneroDefaultNodes()];
-                    return allPresets.includes(saved) ? saved : '__custom__';
-                  })()}
-                  onChange={(e) => {
-                    const customInput = document.getElementById('monero-node-custom');
-                    if (e.target.value === '__custom__') {
-                      customInput.style.display = 'block';
-                      customInput.focus();
-                    } else {
-                      customInput.style.display = 'none';
-                    }
-                  }}
-                >
-                  <option value="http://127.0.0.1:18081">localhost:18081 (daemon local)</option>
-                  <option value="http://127.0.0.1:18082">localhost:18082 (wallet-rpc local)</option>
-                  {getMoneroDefaultNodes().map((node, index) => (
-                    <option key={index} value={node}>{node.replace('http://', '')}</option>
-                  ))}
-                  <option value="__custom__">Noeud custom...</option>
-                </select>
-                <input
-                  type="text"
-                  id="monero-node-custom"
-                  placeholder="http://mon-noeud:18081"
-                  className={`w-full mt-2 px-3 py-2.5 ${T.inputBg} border ${T.inputBorder} rounded-lg text-sm font-mono focus:outline-none focus:border-amber-500/50`}
-                  style={{ display: (() => {
-                    const saved = currentMoneroWallet?.nodeUrl;
-                    if (!saved) return 'none';
-                    const allPresets = ['http://127.0.0.1:18081', 'http://127.0.0.1:18082', ...getMoneroDefaultNodes()];
-                    return allPresets.includes(saved) ? 'none' : 'block';
-                  })() }}
-                  defaultValue={(() => {
-                    const saved = currentMoneroWallet?.nodeUrl;
-                    if (!saved) return '';
-                    const allPresets = ['http://127.0.0.1:18081', 'http://127.0.0.1:18082', ...getMoneroDefaultNodes()];
-                    return allPresets.includes(saved) ? '' : saved;
-                  })()}
-                  onKeyDown={(e) => { if (e.key === 'Enter') document.getElementById('monero-test-btn')?.click(); }}
-                />
+                {(() => {
+                  const saved = currentMoneroWallet?.nodeUrl || '';
+                  const allPresets = ['http://127.0.0.1:18081', 'http://127.0.0.1:18082', ...getMoneroDefaultNodes()];
+                  const isCustom = saved && !allPresets.includes(saved);
+                  const initVal = !saved ? getMoneroDefaultNodes()[0] : (isCustom ? '__custom__' : saved);
+                  return (<>
+                    <select
+                      key={`node-select-${currentMoneroWallet?.id}`}
+                      className={`w-full px-3 py-2.5 ${T.inputBg} border ${T.inputBorder} rounded-lg text-sm ${T.text}`}
+                      id="monero-node-select"
+                      defaultValue={initVal}
+                      onChange={(e) => {
+                        const customInput = document.getElementById('monero-node-custom');
+                        if (e.target.value === '__custom__') {
+                          customInput.style.display = 'block';
+                          customInput.focus();
+                        } else {
+                          customInput.style.display = 'none';
+                        }
+                      }}
+                    >
+                      <option value="http://127.0.0.1:18081">localhost:18081 (daemon local)</option>
+                      <option value="http://127.0.0.1:18082">localhost:18082 (wallet-rpc local)</option>
+                      {getMoneroDefaultNodes().map((node, index) => (
+                        <option key={index} value={node}>{node.replace('http://', '')}</option>
+                      ))}
+                      <option value="__custom__">Noeud custom...</option>
+                    </select>
+                    <input
+                      type="text"
+                      id="monero-node-custom"
+                      key={`node-custom-${currentMoneroWallet?.id}`}
+                      placeholder="http://mon-noeud:18081"
+                      className={`w-full mt-2 px-3 py-2.5 ${T.inputBg} border ${T.inputBorder} rounded-lg text-sm font-mono ${T.text} focus:outline-none focus:border-amber-500/50`}
+                      style={{ display: isCustom ? 'block' : 'none' }}
+                      defaultValue={isCustom ? saved : ''}
+                      onKeyDown={(e) => { if (e.key === 'Enter') document.getElementById('monero-test-btn')?.click(); }}
+                    />
+                  </>);
+                })()}
                 <div className="flex items-center gap-2 mt-2">
                   {(() => {
                     const nodeVal = currentMoneroWallet?.nodeUrl || getMoneroDefaultNodes()[0];
@@ -3159,7 +3154,7 @@ const App = () => {
               </div>
               
               {/* Security Warning */}
-              <div className={`p-3 bg-zinc-900/50 rounded-lg border border-zinc-800 text-xs ${T.textFaint}`}>
+              <div className={`p-3 ${T.inputBg} rounded-lg border ${T.inputBorder} text-xs ${T.textFaint}`}>
                 <div className="font-medium mb-2 flex items-center gap-2">
                   <span>🔒</span> <span>Important : Sécurité</span>
                 </div>
