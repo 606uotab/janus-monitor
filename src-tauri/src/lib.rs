@@ -1639,6 +1639,12 @@ async fn check_blockchair_transactions(address: &str, chain: &str, required_conf
 
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct BlockInfo {
+    pub height: u64,
+    pub timestamp: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct Prices {
     pub btc: AssetPrice,
     pub xmr: AssetPrice,
@@ -1663,6 +1669,13 @@ pub struct Prices {
     pub rai: AssetPrice,
     pub crv: AssetPrice,
     pub paxg: AssetPrice,
+    // Block heights & timestamps
+    pub block_btc: BlockInfo,
+    pub block_eth: BlockInfo,
+    pub block_ltc: BlockInfo,
+    pub block_bch: BlockInfo,
+    pub block_doge: BlockInfo,
+    pub block_dash: BlockInfo,
     // Forex & Gold
     pub forex_jpy_per_usd: f64,
     pub forex_cny_per_usd: f64,
@@ -2522,12 +2535,81 @@ async fn get_prices() -> Result<Prices, String> {
         }
     }
 
+    // ── Block Heights & Timestamps ──
+
+    // BTC via Blockstream
+    if let Ok(response) = client.get("https://blockstream.info/api/blocks/tip").send().await {
+        if response.status().is_success() {
+            if let Ok(data) = response.json::<Vec<serde_json::Value>>().await {
+                if let Some(block) = data.first() {
+                    if let Some(h) = block.get("height").and_then(|v| v.as_u64()) {
+                        prices.block_btc.height = h;
+                    }
+                    if let Some(t) = block.get("timestamp").and_then(|v| v.as_i64()) {
+                        prices.block_btc.timestamp = t;
+                    }
+                }
+            }
+        }
+    }
+
+    // ETH via Etherscan (no key needed for proxy calls at low rate)
+    if let Ok(response) = client.get("https://api.etherscan.io/api?module=proxy&action=eth_getBlockByNumber&tag=latest&boolean=false").send().await {
+        if response.status().is_success() {
+            if let Ok(data) = response.json::<serde_json::Value>().await {
+                if let Some(result) = data.get("result") {
+                    if let Some(hex_num) = result.get("number").and_then(|v| v.as_str()) {
+                        if let Ok(h) = u64::from_str_radix(hex_num.trim_start_matches("0x"), 16) {
+                            prices.block_eth.height = h;
+                        }
+                    }
+                    if let Some(hex_ts) = result.get("timestamp").and_then(|v| v.as_str()) {
+                        if let Ok(t) = i64::from_str_radix(hex_ts.trim_start_matches("0x"), 16) {
+                            prices.block_eth.timestamp = t;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // LTC, BCH, DOGE, DASH via Blockchair /stats
+    for (chain, field) in [
+        ("litecoin", "ltc"),
+        ("bitcoin-cash", "bch"),
+        ("dogecoin", "doge"),
+        ("dash", "dash"),
+    ] {
+        let url = format!("https://api.blockchair.com/{}/stats", chain);
+        if let Ok(response) = client.get(&url).send().await {
+            if response.status().is_success() {
+                if let Ok(data) = response.json::<serde_json::Value>().await {
+                    if let Some(d) = data.get("data") {
+                        let height = d.get("best_block_height").and_then(|v| v.as_u64()).unwrap_or(0);
+                        let ts_str = d.get("best_block_time").and_then(|v| v.as_str()).unwrap_or("");
+                        // Parse "2024-02-21 14:32:00" UTC timestamp
+                        let timestamp = chrono::NaiveDateTime::parse_from_str(ts_str, "%Y-%m-%d %H:%M:%S")
+                            .map(|dt| dt.and_utc().timestamp())
+                            .unwrap_or(0);
+                        match field {
+                            "ltc" => { prices.block_ltc.height = height; prices.block_ltc.timestamp = timestamp; }
+                            "bch" => { prices.block_bch.height = height; prices.block_bch.timestamp = timestamp; }
+                            "doge" => { prices.block_doge.height = height; prices.block_doge.timestamp = timestamp; }
+                            "dash" => { prices.block_dash.height = height; prices.block_dash.timestamp = timestamp; }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     Ok(prices)
 }
 
-// 
+//
 // COMMANDES TAURI - FETCH BALANCE ON-CHAIN
-// 
+//
 
 #[derive(Debug, Deserialize)]
 struct BlockstreamUtxo {

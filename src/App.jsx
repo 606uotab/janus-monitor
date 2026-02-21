@@ -263,7 +263,39 @@ const App = () => {
   const maskAddress = (addr) => !addr ? '' : addr.length <= 10 ? addr : addr.substring(0, 6) + '••••••••';
   const formatNum = (n, dec = 2) => (n === null || n === undefined || isNaN(n)) ? '–' : n.toLocaleString('fr-FR', { minimumFractionDigits: dec, maximumFractionDigits: dec });
   const maskBalance = (value, decimals = 2) => hideBalances ? '*****' : formatNum(value, decimals);
-  
+
+  // ── Block timestamp helpers ──
+  const timeAgo = (ts) => {
+    if (!ts) return '—';
+    const diff = Math.floor(Date.now() / 1000) - ts;
+    if (diff < 0) return 'now';
+    if (diff < 60) return `${diff}s`;
+    if (diff < 3600) return `${Math.floor(diff / 60)}m ${diff % 60}s`;
+    if (diff < 86400) return `${Math.floor(diff / 3600)}h ${Math.floor((diff % 3600) / 60)}m`;
+    return `${Math.floor(diff / 86400)}d`;
+  };
+
+  const BLOCK_CHAIN_MAP = {
+    btc: 'btc', eth: 'eth', link: 'eth', uni: 'eth', aave: 'eth', usdt: 'eth', usdc: 'eth',
+    dai: 'eth', eurc: 'eth', crv: 'eth', paxg: 'eth', xaut: 'eth', rai: 'eth',
+    ltc: 'ltc', bch: 'bch', doge: 'doge', dash: 'dash',
+  };
+  const FAST_CHAINS = ['sol', 'ada', 'avax', 'dot', 'xrp', 'near'];
+  const EXPECTED_BLOCK_TIME = { btc: 600, eth: 12, ltc: 150, bch: 600, doge: 60, dash: 150 };
+
+  const getBlockDotColor = (asset) => {
+    if (FAST_CHAINS.includes(asset)) return 'bg-green-500';
+    const chain = BLOCK_CHAIN_MAP[asset];
+    if (!chain) return 'bg-zinc-600';
+    const block = prices[`block_${chain}`];
+    if (!block || !block.timestamp) return 'bg-zinc-600';
+    const age = Math.floor(Date.now() / 1000) - block.timestamp;
+    const expected = EXPECTED_BLOCK_TIME[chain] || 600;
+    if (age < expected * 2) return 'bg-green-500';
+    if (age < expected * 5) return 'bg-amber-500';
+    return 'bg-red-500';
+  };
+
   // Helper to check if a wallet has encrypted data
   const isWalletEncrypted = (wallet) => {
     return wallet.encrypted && wallet.encryption_salt && 
@@ -1604,6 +1636,7 @@ const App = () => {
     return (
       <div className={`${T.rowBg} border ${T.rowBorder} rounded-lg px-3 py-2 flex items-center justify-between group`}>
         <div className="flex items-center gap-3 cursor-pointer flex-1 min-w-0" onClick={() => startEdit(wallet)}>
+          <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${getBlockDotColor(wallet.asset)}`} title={`Bloc ${BLOCK_CHAIN_MAP[wallet.asset]?.toUpperCase() || wallet.asset.toUpperCase()}`} />
           <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${cfg.bg} ${cfg.color} flex-shrink-0`}>{cfg.symbol}</span>
           <div className="min-w-0">
             <div className="text-sm font-medium flex items-center gap-2">
@@ -1700,6 +1733,7 @@ const App = () => {
       <div className="space-y-0">
         <div className={`${T.rowBg} border ${T.rowBorder} ${moneroInfo ? 'rounded-lg' : 'rounded-t-lg border-b-0'} px-3 py-2 flex items-center justify-between group`}>
           <div className="flex items-center gap-3 cursor-pointer flex-1 min-w-0" onClick={() => startEdit(wallet)}>
+            <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${getBlockDotColor(wallet.asset)}`} title={`Bloc ${wallet.asset.toUpperCase()}`} />
             <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${cfg.bg} ${cfg.color} flex-shrink-0`}>{cfg.symbol}</span>
             <div className="min-w-0">
               <div className="text-sm font-medium flex items-center gap-2">
@@ -1798,7 +1832,7 @@ const App = () => {
   };
 
   return (
-    <div className={`min-h-screen ${T.bg} ${T.textMain}`}>
+    <div className={`min-h-screen pb-7 ${T.bg} ${T.textMain}`}>
       {/* Noctali starfield + moon + images */}
       {theme === 'noctali' && <><NoctaliStarfield /><NoctaliMoon /><NoctaliImages /></>}
       {theme === 'lunarpunk' && <><LunarPunkDust /><LunarPunkDunes /><LunarPunkMoon /></>}
@@ -1992,9 +2026,43 @@ const App = () => {
                 </div>
               </div>
 
+              {/* ── SECTION 5: Block Heights ── */}
+              <div className="mb-6">
+                <div className="text-amber-500/60 text-[10px] uppercase tracking-widest mb-2">▸ Block Heights & Network Status</div>
+                <table className="w-full">
+                  <tbody>
+                    <Row header cells={['CHAIN', 'HEIGHT', 'LAST BLOCK', 'AGE', 'STATUS']} />
+                    {[
+                      { sym: 'BTC', block: p.block_btc, expected: 600 },
+                      { sym: 'ETH', block: p.block_eth, expected: 12 },
+                      { sym: 'LTC', block: p.block_ltc, expected: 150 },
+                      { sym: 'BCH', block: p.block_bch, expected: 600 },
+                      { sym: 'DOGE', block: p.block_doge, expected: 60 },
+                      { sym: 'DASH', block: p.block_dash, expected: 150 },
+                    ].filter(c => c.block?.height > 0).map(({ sym, block, expected }) => {
+                      const age = Math.floor(Date.now() / 1000) - (block?.timestamp || 0);
+                      const statusColor = age < expected * 2 ? 'text-green-500' : age < expected * 5 ? 'text-amber-500' : 'text-red-500';
+                      const statusLabel = age < expected * 2 ? 'NORMAL' : age < expected * 5 ? 'SLOW' : 'DELAYED';
+                      return (
+                        <Row key={sym} cells={[
+                          <span className="text-amber-400 font-bold">{sym}</span>,
+                          <span className="text-white font-mono">{block.height.toLocaleString()}</span>,
+                          <span className="text-zinc-400">{block.timestamp ? new Date(block.timestamp * 1000).toLocaleString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '—'}</span>,
+                          <span className="text-zinc-300">{timeAgo(block.timestamp)}</span>,
+                          <span className={`${statusColor} font-bold`}>● {statusLabel}</span>,
+                        ]} />
+                      );
+                    })}
+                  </tbody>
+                </table>
+                {[p.block_btc, p.block_eth, p.block_ltc, p.block_bch, p.block_doge, p.block_dash].every(b => !b?.height) && (
+                  <div className="text-zinc-600 text-[10px] mt-2 ml-2">Données bloc en cours de chargement...</div>
+                )}
+              </div>
+
               {/* Footer */}
               <div className="text-zinc-700 text-[10px] text-center border-t border-zinc-800 pt-3">
-                Binance REST API · Bitfinex v2 · CoinGecko free · Frankfurter (ECB) · er-api.com · Yahoo Finance
+                Binance REST API · Bitfinex v2 · CoinGecko free · Frankfurter (ECB) · er-api.com · Yahoo Finance · Blockstream · Blockchair
               </div>
             </div>
           </div>
@@ -3242,6 +3310,33 @@ const App = () => {
               {pinModal.mode === 'setup' ? 'Activer PIN + Chiffrement' : pinModal.mode === 'change' ? 'Changer le PIN' : 'Confirmer'}
             </button>
           </div>
+        </div>
+      )}
+
+      {/* ── Block Status Bar (fixed bottom) ── */}
+      {(prices.block_btc?.height > 0 || prices.block_eth?.height > 0) && (
+        <div className={`fixed bottom-0 left-0 right-0 z-50 h-7 ${T.barBg} border-t ${T.border} flex items-center justify-center gap-4 font-mono text-[10px] ${T.textFaint} select-none`}>
+          {[
+            { label: 'BTC', block: prices.block_btc },
+            { label: 'ETH', block: prices.block_eth },
+            { label: 'LTC', block: prices.block_ltc },
+            { label: 'BCH', block: prices.block_bch },
+            { label: 'DOGE', block: prices.block_doge },
+            { label: 'DASH', block: prices.block_dash },
+          ].filter(c => c.block?.height > 0).map(({ label, block }) => {
+            const chain = label.toLowerCase();
+            const age = Math.floor(Date.now() / 1000) - block.timestamp;
+            const expected = EXPECTED_BLOCK_TIME[chain] || 600;
+            const dotColor = age < expected * 2 ? 'bg-green-500' : age < expected * 5 ? 'bg-amber-500' : 'bg-red-500';
+            return (
+              <span key={label} className="flex items-center gap-1">
+                <span className={`w-1 h-1 rounded-full ${dotColor}`} />
+                <span className={T.textMuted}>{label}</span>
+                <span>#{block.height.toLocaleString()}</span>
+                <span className={T.textFaint}>· {timeAgo(block.timestamp)}</span>
+              </span>
+            );
+          })}
         </div>
       )}
     </div>
