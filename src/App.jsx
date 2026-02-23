@@ -958,7 +958,7 @@ const App = () => {
         const merged = { ...prev };
         for (const key of Object.keys(d)) {
           if (typeof d[key] === 'object' && d[key] !== null) {
-            if (d[key].usd > 0 || d[key].eur > 0) merged[key] = d[key];
+            if (d[key].usd > 0 || d[key].eur > 0 || d[key].height > 0) merged[key] = d[key];
           } else if (d[key] !== 0 && d[key] !== undefined) {
             merged[key] = d[key];
           }
