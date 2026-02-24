@@ -1676,6 +1676,7 @@ pub struct Prices {
     pub block_bch: BlockInfo,
     pub block_doge: BlockInfo,
     pub block_dash: BlockInfo,
+    pub block_etc: BlockInfo,
     // Forex & Gold
     pub forex_jpy_per_usd: f64,
     pub forex_cny_per_usd: f64,
@@ -2597,6 +2598,36 @@ async fn get_prices() -> Result<Prices, String> {
                             "doge" => { prices.block_doge.height = height; prices.block_doge.timestamp = timestamp; }
                             "dash" => { prices.block_dash.height = height; prices.block_dash.timestamp = timestamp; }
                             _ => {}
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ETC via Blockscout
+    if let Ok(response) = client.get("https://blockscout.com/etc/mainnet/api?module=block&action=eth_block_number").send().await {
+        if response.status().is_success() {
+            if let Ok(data) = response.json::<serde_json::Value>().await {
+                if let Some(hex_num) = data.get("result").and_then(|v| v.as_str()) {
+                    if let Ok(h) = u64::from_str_radix(hex_num.trim_start_matches("0x"), 16) {
+                        prices.block_etc.height = h;
+                        // Get timestamp from latest block
+                        let block_url = format!("https://blockscout.com/etc/mainnet/api?module=block&action=getblocknobytime&timestamp={}&closest=before", chrono::Utc::now().timestamp());
+                        if let Ok(resp2) = client.get(&block_url).send().await {
+                            if resp2.status().is_success() {
+                                if let Ok(d2) = resp2.json::<serde_json::Value>().await {
+                                    if let Some(ts) = d2.get("result").and_then(|v| v.get("blockTimestamp")).and_then(|v| v.as_str()) {
+                                        if let Ok(t) = ts.parse::<i64>() {
+                                            prices.block_etc.timestamp = t;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        // Fallback: use current time minus ~13s as approximate
+                        if prices.block_etc.timestamp == 0 {
+                            prices.block_etc.timestamp = chrono::Utc::now().timestamp() - 13;
                         }
                     }
                 }

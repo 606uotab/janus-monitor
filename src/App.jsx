@@ -278,10 +278,10 @@ const App = () => {
   const BLOCK_CHAIN_MAP = {
     btc: 'btc', eth: 'eth', link: 'eth', uni: 'eth', aave: 'eth', usdt: 'eth', usdc: 'eth',
     dai: 'eth', eurc: 'eth', crv: 'eth', paxg: 'eth', xaut: 'eth', rai: 'eth',
-    ltc: 'ltc', bch: 'bch', doge: 'doge', dash: 'dash',
+    ltc: 'ltc', bch: 'bch', doge: 'doge', dash: 'dash', etc: 'etc',
   };
   const FAST_CHAINS = ['sol', 'ada', 'avax', 'dot', 'xrp', 'near'];
-  const EXPECTED_BLOCK_TIME = { btc: 600, eth: 12, ltc: 150, bch: 600, doge: 60, dash: 150 };
+  const EXPECTED_BLOCK_TIME = { btc: 600, eth: 12, ltc: 150, bch: 600, doge: 60, dash: 150, etc: 13 };
 
   const getBlockDotColor = (asset) => {
     if (FAST_CHAINS.includes(asset)) return 'bg-green-500';
@@ -2039,6 +2039,7 @@ const App = () => {
                       { sym: 'BCH', block: p.block_bch, expected: 600 },
                       { sym: 'DOGE', block: p.block_doge, expected: 60 },
                       { sym: 'DASH', block: p.block_dash, expected: 150 },
+                      { sym: 'ETC', block: p.block_etc, expected: 13 },
                     ].filter(c => c.block?.height > 0).map(({ sym, block, expected }) => {
                       const age = Math.floor(Date.now() / 1000) - (block?.timestamp || 0);
                       const statusColor = age < expected * 2 ? 'text-green-500' : age < expected * 5 ? 'text-amber-500' : 'text-red-500';
@@ -2055,7 +2056,7 @@ const App = () => {
                     })}
                   </tbody>
                 </table>
-                {[p.block_btc, p.block_eth, p.block_ltc, p.block_bch, p.block_doge, p.block_dash].every(b => !b?.height) && (
+                {[p.block_btc, p.block_eth, p.block_ltc, p.block_bch, p.block_doge, p.block_dash, p.block_etc].every(b => !b?.height) && (
                   <div className="text-zinc-600 text-[10px] mt-2 ml-2">Données bloc en cours de chargement...</div>
                 )}
               </div>
@@ -3323,6 +3324,7 @@ const App = () => {
             { label: 'BCH', block: prices.block_bch },
             { label: 'DOGE', block: prices.block_doge },
             { label: 'DASH', block: prices.block_dash },
+            { label: 'ETC', block: prices.block_etc },
           ].filter(c => c.block?.height > 0).map(({ label, block }) => {
             const chain = label.toLowerCase();
             const age = Math.floor(Date.now() / 1000) - block.timestamp;

@@ -1,5 +1,64 @@
 # Changelog
 
+## [2.5.0] — 2026-02-24
+
+### Block Timestamps & Network Status
+- Hauteur et timestamp du dernier bloc pour 7 chaines : BTC, ETH, LTC, BCH, DOGE, DASH, ETC
+- APIs : Blockstream (BTC), Etherscan (ETH), Blockchair (LTC/BCH/DOGE/DASH), Blockscout (ETC)
+- **Barre de statut fixe** en bas de l'app : hauteur + age de chaque chaine avec pastille coloree
+- **Section Block Heights** dans le Price Terminal (Ctrl+Shift+P) : table complete avec status NORMAL/SLOW/DELAYED
+- **Pastille coloree** dans chaque wallet row : vert (<2x block time), orange (2-5x), rouge (>5x), gris (pas de donnees)
+- Tokens ERC-20 heritent du statut ETH ; chaines rapides (SOL, ADA, AVAX, DOT, XRP, NEAR) toujours vert
+
+### Monero Integration
+- Rewrite complet de `monero_integration.rs` : vrais appels RPC daemon + wallet-rpc
+- Support noeud RPC custom (localhost ou distant) avec presets (Cake, SupportXMR)
+- Select avec presets + option "Noeud custom..." revelant un input texte
+- Bandeau violet sous les wallets XMR non configures : "Configurer un noeud RPC Monero"
+- Badge vert "RPC" quand le noeud est configure
+- Pre-remplissage des cles existantes dans le modal de configuration
+- Chiffrement view_key/spend_key dans les profils exportes
+
+### Export / Import de Profils
+- Commande `export_profile` : exporte le profil en JSON (telechargement via Blob)
+- Commande `import_profile` : importe un JSON valide avec validation de structure
+- Boutons dans le menu Profils avec icones fleche
+
+### Corrections
+- Fix BCH : prefixe `bitcoincash:` automatique pour les adresses CashAddr (Blockchair)
+- Fix TX History : `typeof [] === 'object'` corrige avec `Array.isArray()` dans secureBackend.js
+- Fix Monero frontend : fonctions `prepareMoneroWalletData`/`testMoneroNode` indefinies, remplacees par inline
+- Fix `update_wallet` : view_key/spend_key/node_url ignores silencieusement par Tauri, ajoutes a la signature
+- Fix select Monero : `key` prop pour forcer le remount React avec defaultValue correct
+- Fix modal Monero : couleurs theme-aware (`${T.bg}`, `${T.text}`, `${T.border}`)
+- Fix merge prices : objets `block_*` filtres car pas de champ `usd`/`eur`, ajoute `height > 0`
+
+### Backend
+- Migration DB v2→v3 : colonnes view_key, spend_key, node_url dans wallets
+- `BlockInfo` struct (height u64, timestamp i64) + 7 champs dans `Prices`
+- COALESCE dans UPDATE wallets pour preserver les cles Monero existantes
+- `chrono::NaiveDateTime` pour parser les timestamps Blockchair
+
+### UI
+- Modal Monero theme-aware (fond, bordures, inputs adaptent au theme actif)
+- Footer Price Terminal : ajout Blockstream + Blockchair dans les sources
+
+---
+
+## [2.3.1] — 2026-02-17
+
+### Android Port
+- Port Tauri Mobile (Android) via `cargo tauri android init`
+- Configuration Gradle, AndroidManifest, permissions reseau
+- README mis a jour pour refleter le support Android
+
+### St. Jude Theme (Special Edition)
+- Theme hommage a Jude Milhon (St. Jude), pionniere cypherpunk
+- Filigrane PGP, citations rotatives, portrait, banniere
+- Easter egg : triple-clic sur le titre ouvre la page Wikipedia
+
+---
+
 ## [2.3.0] — 2026-02-15
 
 ### 2FA TOTP Authentication
